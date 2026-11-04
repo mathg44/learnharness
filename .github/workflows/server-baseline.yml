@@ -1,0 +1,40 @@
+name: Fork server baseline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-server-baseline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    if: github.repository == 'mathg44/learnharness'
+    name: Isolated Node 26 checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The runner snapshots Git, not the checkout's environment or private files.
+      # Tests and subscription smoke have no external network or published ports.
+      - name: Verify committed source with disposable data and synthetic providers
+        run: bash scripts/check-server-baseline.sh HEAD
+      # Keep full synthetic diagnostics local to the runner. Do not upload builds,
+      # profiles, subscription credentials, or raw fixture output as artifacts.
+      - name: Check summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -d .git/pi-issue/checks ]]; then
+            find .git/pi-issue/checks -name results.txt -exec cat {} \; >> "$GITHUB_STEP_SUMMARY"
+          fi
