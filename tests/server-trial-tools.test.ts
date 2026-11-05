@@ -30,35 +30,51 @@ import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { createFauxCore, fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 
-import {
-	filterServerTrialTools,
-	isServerTrialEnabled,
-	serverTrialJobBlockReason,
-	serverTrialToolBlockReason,
-} from "../src/core/server-trial.ts";
-import { readTool } from "../src/agent/tools/read.ts";
-import { lsTool } from "../src/agent/tools/ls.ts";
-import { findTool } from "../src/agent/tools/find.ts";
-import { grepTool } from "../src/agent/tools/grep.ts";
-import { createShowImageTool } from "../src/agent/tools/show-image.ts";
-import { jobTools } from "../src/agent/tools/jobs.ts";
-import { createWebTools } from "../src/agent/tools/web.ts";
-import { createPdfReadTools } from "../src/agent/tools/pdf-read.ts";
-import { createProberTools, createTeacherTools } from "../src/agent/tools.ts";
-import { practiceTools } from "../src/agent/tools/practice.ts";
-import { createJobRunner, demoModelOverride, pdfModelOverride, researchModelOverride, visualModelOverride } from "../src/agent/subagents/runner.ts";
-import { runResearcherAgent } from "../src/agent/subagents/researcher.ts";
-import { runDemoBuilder } from "../src/agent/subagents/demo-builder.ts";
-import { runVisualMaker } from "../src/agent/subagents/visual-maker.ts";
-import { runPdfReaderAgent } from "../src/agent/subagents/pdf-reader.ts";
-import { chatStore } from "../src/store/chats.ts";
-import { jobStore } from "../src/store/jobs.ts";
 import type { JobRecord, PdfResult, DemoResult, VisualResult, ResearchResult } from "../src/core/contracts.ts";
 import type { PiEngine } from "../src/agent/models.ts";
-import { PATHS } from "../config.ts";
+
+// Match file-access.test.ts: isolate the profile before config or stores load.
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), "lh-server-trial-tools-"));
+const priorEnv = Object.fromEntries(["HOME", "USERPROFILE", "LH_DATA_DIR", "LH_AUTH_FILE"].map((key) => [key, process.env[key]]));
+const home = path.join(profile, "home");
+const auth = path.join(profile, "auth.json");
+fs.mkdirSync(home);
+fs.writeFileSync(auth, "{}\n", { mode: 0o600 });
+Object.assign(process.env, { HOME: home, USERPROFILE: home, LH_DATA_DIR: path.join(profile, "data"), LH_AUTH_FILE: auth });
+after(() => {
+	try {
+		fs.rmSync(profile, { recursive: true, force: true });
+	} finally {
+		for (const [key, value] of Object.entries(priorEnv)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	}
+});
+
+const { filterServerTrialTools, isServerTrialEnabled, serverTrialJobBlockReason, serverTrialToolBlockReason } = await import("../src/core/server-trial.ts");
+const { readTool } = await import("../src/agent/tools/read.ts");
+const { lsTool } = await import("../src/agent/tools/ls.ts");
+const { findTool } = await import("../src/agent/tools/find.ts");
+const { grepTool } = await import("../src/agent/tools/grep.ts");
+const { createShowImageTool } = await import("../src/agent/tools/show-image.ts");
+const { jobTools } = await import("../src/agent/tools/jobs.ts");
+const { createWebTools } = await import("../src/agent/tools/web.ts");
+const { createPdfReadTools } = await import("../src/agent/tools/pdf-read.ts");
+const { createProberTools, createTeacherTools } = await import("../src/agent/tools.ts");
+const { practiceTools } = await import("../src/agent/tools/practice.ts");
+const { createJobRunner, demoModelOverride, pdfModelOverride, researchModelOverride, visualModelOverride } = await import("../src/agent/subagents/runner.ts");
+const { runResearcherAgent } = await import("../src/agent/subagents/researcher.ts");
+const { runDemoBuilder } = await import("../src/agent/subagents/demo-builder.ts");
+const { runVisualMaker } = await import("../src/agent/subagents/visual-maker.ts");
+const { runPdfReaderAgent } = await import("../src/agent/subagents/pdf-reader.ts");
+const { chatStore } = await import("../src/store/chats.ts");
+const { jobStore } = await import("../src/store/jobs.ts");
+const { PATHS } = await import("../config.ts");
 
 const BLOCKED_TOOLS = ["read", "ls", "find", "grep", "show_image", "research", "demo", "visual", "pdf"] as const;
 
