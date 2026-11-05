@@ -1,5 +1,7 @@
 # Verified upstream baseline for the fork
 
+The sections through "Blockers and next-ticket boundaries" record the historical 2026-11-04 verification of upstream v0.4.1 for issue #1. Their results and blockers describe that revision, not the current trial. See [the post-v0.5.0 patch notes](#compatible-dependency-patches-after-v050) below for the current dependency update and [the private-trial guide](private-trial.md) for current operating restrictions.
+
 ## Scope and provenance
 
 Verified on 2026-11-04 for issue #1. This is a development/checking baseline, not approval to install or deploy the app.
@@ -198,3 +200,40 @@ There is no remaining blocker to reproducing the listed Node checks once the exp
 5. **Remote subscriptions and process ownership.** ChatGPT's loopback callback is not implemented for an arbitrary remote browser; all browsers share server credentials and background-use consent. One process owns one data/auth profile. Any different requirement needs an explicit ticket and owner decision, not an implicit multi-user conversion.
 
 No inspection proved a prerequisite broad refactor. The only implemented preparation change is explicit dependency-binary download in the checking script. If a later ticket proposes removing the visual worker's browser-availability coupling, first reproduce it with the focused test above and approve a bounded test-seam/guard change that preserves native rendering and mandatory demo verification.
+
+## Compatible dependency patches after v0.5.0
+
+This source update starts from `8c0a882`, after the historical baseline above. It changes compatible lockfile resolutions, not application code or deployment. Manifest ranges and existing overrides remain unchanged. The base already resolves DOMPurify to 3.4.17, npm Undici to 7.30.1 and root Zod to 4.6.7; those earlier fixes are retained.
+
+| Dependency | Previous resolution | Patched resolution |
+| --- | --- | --- |
+| `concurrently` | 10.0.5 | 10.0.6 |
+| Its exact `shell-quote` dependency | 1.9.0 | 1.12.0 |
+| `fast-uri` | 3.1.8 | 3.1.9 |
+| `source-map-js` | 1.2.1 | 1.2.2 |
+| Vulnerable `brace-expansion` 1.x copies | 1.1.18 | 1.1.21 |
+| `brace-expansion` 5.x | 5.0.9 | 5.0.12 |
+
+Concurrently 10.0.6 supplies the fixed shell-quote through its own published exact dependency, without an override. All selected resolutions fit their declared parent ranges and Node 26. Unaffected brace-expansion 2.1.7 copies remain unchanged. The lockfile diff contains nine changed package entries and no added or removed packages.
+
+These audit results describe different revisions:
+
+| Audit date | Audited revision or lockfile | Affected package entries |
+| --- | --- | --- |
+| 2026-11-04 | Original upstream baseline `e69e852` | 35, including three critical |
+| 2026-11-05 | Tested `2c6237a`, whose lockfile matches merge base `8c0a882` | 18, including two critical entries for one shell-quote advisory propagated through concurrently |
+| 2026-11-05 | Patched dependency revision `90a8905` | 13, eight moderate and five high, with no critical entries |
+
+The selected package advisories are absent from the patched report. Counts are date-dependent, not proof of exploitability or complete dependency safety. Independent Node 26 verification of `90a8905` passed 3,579 tests with four skips, typecheck, lint, build and subscription smoke. Lint retains one existing warning.
+
+Chromium BiDi's Zod 3 dependency, minimatch and linkify-it remain deferred. Their fixes need separate parent compatibility work. Do not force nested major substitutions or use `npm audit fix --force`. The historical blockers above are not a current deployment assessment. This patch provides no new deployment sign-off: a trial update still needs separate owner approval and a consistent stopped-app data/auth snapshot under [the private-trial guide](private-trial.md). No live provider or deployment operation is part of this update.
+
+### Operator verification
+
+No user-facing verification is required.
+
+- [ ] Use the committed patch branch with Docker and enough temporary disk space for a clean Node 26 install/build. Leave the running trial and its data/auth volumes untouched.
+- [ ] Inspect `git diff 8c0a882...HEAD -- package.json package-lock.json`. Expect no manifest changes and only the nine approved lock entries listed above.
+- [ ] Run `bash scripts/check-server-baseline.sh HEAD`. It archives committed source into disposable containers with separate data/auth/home paths. Expect installation, tests, typecheck, lint, build and subscription smoke checks to pass. One existing lint warning is expected. The audit remains report-only.
+- [ ] Inspect the printed evidence directory's `audit.json`. Expect no entries for `concurrently`, `shell-quote`, `fast-uri`, `source-map-js` or `brace-expansion`; record any new advisories separately. Remaining advisory entries are not accepted as fixed by this patch.
+- [ ] For a focused development CLI check, use a separate disposable checkout with its locked dependencies installed. Run `node node_modules/concurrently/dist/bin/index.js --raw 'node -e "console.log(1)"' 'node -e "console.log(2)"'`. Expect both numbers, in either order, and exit 0. This must not start Next, Electron or a provider request.
