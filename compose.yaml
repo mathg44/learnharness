@@ -1,0 +1,31 @@
+# Test-only until the independent security, native-browser and ingress gates pass.
+services:
+  app:
+    image: learnharness:local
+    build:
+      context: .
+    user: "1000:1000"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+      LH_DATA_DIR: /data
+      LH_AUTH_FILE: /auth/auth.json
+    volumes:
+      - app-data:/data
+      - app-auth:/auth
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777
+      - /app/.next/cache:rw,noexec,nosuid,nodev,size=256m,uid=1000,gid=1000,mode=0700
+
+volumes:
+  app-data:
+  app-auth:
