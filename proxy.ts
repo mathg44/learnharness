@@ -1,10 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { desktopAPIAuthorized } from "./src/server/desktop-access.ts";
+import { evaluateTrialAccess } from "./src/server/trial-access.ts";
 
-/** Applies to every API method, including SSE and spending/settings routes.
- * No public callback or worker bypass: internal jobs call server functions,
- * and any legitimate self-HTTP request must carry the private capability. */
+/** Trial mode protects pages, APIs and streams. Desktop capabilities remain API-only. */
 export function proxy(request: NextRequest) {
+	const trial = evaluateTrialAccess(request.method, request.headers);
+	if (!trial.allowed) {
+		return NextResponse.json({ error: "Access denied." }, { status: 403, headers: { "Cache-Control": "no-store" } });
+	}
+	if (!request.nextUrl.pathname.startsWith("/api/")) return NextResponse.next();
 	if (!desktopAPIAuthorized(request.headers)) {
 		return NextResponse.json(
 			{ error: "Desktop API access requires the trusted LearnHarness window." },
@@ -14,4 +18,4 @@ export function proxy(request: NextRequest) {
 	return NextResponse.next();
 }
 
-export const config = { matcher: "/api/:path*" };
+export const config = { matcher: ["/((?!_next/static/|favicon\\.ico$).*)"] };

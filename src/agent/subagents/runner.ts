@@ -26,6 +26,7 @@ import * as path from "node:path";
 import type { ModelRole } from "../../../config.ts";
 import { ROLE_SLOT, modelsNotConfigured, type ModelSlotName, type ProviderKeyMissing } from "../../core/settings.ts";
 import type { ChatStore, JobStore } from "../../core/ports.ts";
+import { serverTrialJobBlockReason } from "../../core/server-trial.ts";
 import { runDemoBuilder } from "./demo-builder.ts";
 import { runPdfReaderAgent } from "./pdf-reader.ts";
 import { runResearcherAgent } from "./researcher.ts";
@@ -201,7 +202,6 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			jobStore.updateJob(jobId, { status: "error", error: `unknown kind ${job.kind}`, activity: "failed" });
 			return;
 		}
-		const engine = pickEngine(job.kind);
 		// The per-need refusal guards (BYOK 2026-09-22 / provider-key
 		// interlude 2026-09-25): no engine for the kind's tier, or the
 		// resolved engine's provider key gone — both refuse through the SAME
@@ -240,6 +240,13 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 								};
 			await finishJob(jobId, failure);
 		};
+		// Recovery must not restart disabled workers or even resolve their providers.
+		const trialBlock = serverTrialJobBlockReason(job.kind);
+		if (trialBlock) {
+			await refuse(trialBlock);
+			return;
+		}
+		const engine = pickEngine(job.kind);
 		if (!engine) {
 			const tier = ROLE_SLOT[KIND_ROLE[job.kind]];
 			const envelope = modelsNotConfigured([tier]);

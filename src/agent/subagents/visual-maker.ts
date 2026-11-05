@@ -8,6 +8,7 @@ import { providerEventObserver, type ProviderEventObserver } from "../provider-e
 import { backgroundCaptureStream, createBackgroundCapture, type BackgroundCapture } from "../background-capture.ts";
 import type { VisualResult } from "../../core/contracts.ts";
 import { getHeadless, type HeadlessApi } from "./headless.ts";
+import { isServerTrialEnabled } from "../../core/server-trial.ts";
 
 /**
  * The visual-maker sub-agent (vision §2.5): authors ONE precise SVG from a
@@ -133,6 +134,14 @@ export async function runVisualMaker(input: VisualMakerInput, opts: VisualMakerO
 	const headless = opts.headless ?? getHeadless();
 	const brief = input.brief.trim() || "(no brief)";
 	const maxIterations = opts.maxIterations ?? 8;
+
+	// THE SERVER-TRIAL GATE, direct-entrypoint layer (core/server-trial.ts):
+	// the runner already refuses "visual" jobs before this is ever called —
+	// this guard covers any other caller, so the headless/resvg render path
+	// never starts under the trial no matter the call path.
+	if (isServerTrialEnabled()) {
+		return { svg: "", notes: "FAILED: visual figures are disabled in this server trial (LH_SERVER_TRIAL=1)" };
+	}
 
 	const reason = headless.unavailableReason();
 	if (reason) {

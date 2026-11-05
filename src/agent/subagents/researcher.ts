@@ -5,6 +5,7 @@ import { createPdfReadTools } from "../tools/pdf-read.ts";
 import type { SearchProvider } from "../../core/search.ts";
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
+import { isServerTrialEnabled } from "../../core/server-trial.ts";
 
 /**
  * The researcher sub-agent (vision §2.5): a SEPARATE ToolLoopAgent instance
@@ -92,6 +93,14 @@ export interface ResearcherRunOptions {
  * the loop scripted.
  */
 export async function runResearcherAgent(prompt: string, opts: ResearcherRunOptions = {}): Promise<string> {
+	// THE SERVER-TRIAL GATE, direct-entrypoint layer (core/server-trial.ts):
+	// the runner already refuses "research" jobs before this is ever called
+	// — this guard covers any other caller (tests, future wiring) that
+	// invokes the researcher directly, so web_search/web_fetch never run
+	// under the trial no matter the call path.
+	if (isServerTrialEnabled()) {
+		throw new Error('research is disabled in this server trial (LH_SERVER_TRIAL=1)');
+	}
 	const tools = Object.values(createWebTools(opts.search ?? (() => null)));
 	if (opts.pdfDir) tools.push(...Object.values(createPdfReadTools(opts.pdfDir)));
 	const { text } = await runSubagent(tools, {

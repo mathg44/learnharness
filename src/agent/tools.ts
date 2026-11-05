@@ -13,6 +13,7 @@ import {
 	quizInputProblems,
 } from "../core/question-core.ts";
 import { filterEnabledTools, type EnabledTools } from "../core/pending.ts";
+import { filterServerTrialTools } from "../core/server-trial.ts";
 import type { JobRecord } from "../core/contracts.ts";
 import type { JobStore } from "../core/ports.ts";
 import { jobTools, type DemoInput, type PdfInput, type ResearchInput, type VisualInput } from "./tools/jobs.ts";
@@ -314,37 +315,44 @@ export function createProberTools(
 	// healToolRecord (owner, 2026-10-09 — the whitehead generalization):
 	// the standard argument heal over the WHOLE registry — every tool,
 	// not just the one the latest wobble incident landed on.
-	return healToolRecord({
-		...filterEnabledTools(
-			{
-				...quizzing,
-				ask_user_question: askUserQuestionTool,
-				// The learner-filesystem set is always-on (user-decided 2026-09,
-				// sources v1): the prober inspects and LOCATES learner-referenced
-				// files while assessing the edge. Read-only by construction.
-				read: readTool,
-				ls: lsTool,
-				find: findTool,
-				grep: grepTool,
-				// Job dispatch in the probe phase (owner ruling, 2026-09-20):
-				// research + pdf are ALWAYS available in every phase — the
-				// prober can verify facts or read learner PDFs while assessing.
-				// demo/visual stay teach-phase-only (they need the lesson's plan
-				// context). Same user-toggle filtering as the teacher; research
-				// remains available without a search-provider key.
-				...(jobs.research ? { research: jobs.research } : {}),
-				pdf: jobs.pdf!,
-				// The map reader (wave 7): present only when the settings gate
-				// opened.
-				...(ctx.graphStore
-					? proberGraphTools({ chatStore: ctx.chatStore, graphStore: ctx.graphStore })
-					: {}),
-				...done,
-			},
+	// THE SERVER-TRIAL GATE, registry layer (core/server-trial.ts): applied
+	// LAST, after the user-settings filter — it drops read/ls/find/grep and
+	// the research/pdf dispatch tools unconditionally, so no settings delta
+	// (filterEnabledTools only ever narrows, never widens) can bring one
+	// back. A no-op when LH_SERVER_TRIAL is unset.
+	return filterServerTrialTools(
+		healToolRecord({
+			...filterEnabledTools(
+				{
+					...quizzing,
+					ask_user_question: askUserQuestionTool,
+					// The learner-filesystem set is always-on (user-decided 2026-09,
+					// sources v1): the prober inspects and LOCATES learner-referenced
+					// files while assessing the edge. Read-only by construction.
+					read: readTool,
+					ls: lsTool,
+					find: findTool,
+					grep: grepTool,
+					// Job dispatch in the probe phase (owner ruling, 2026-09-20):
+					// research + pdf are ALWAYS available in every phase — the
+					// prober can verify facts or read learner PDFs while assessing.
+					// demo/visual stay teach-phase-only (they need the lesson's plan
+					// context). Same user-toggle filtering as the teacher; research
+					// remains available without a search-provider key.
+					...(jobs.research ? { research: jobs.research } : {}),
+					pdf: jobs.pdf!,
+					// The map reader (wave 7): present only when the settings gate
+					// opened.
+					...(ctx.graphStore
+						? proberGraphTools({ chatStore: ctx.chatStore, graphStore: ctx.graphStore })
+						: {}),
+					...done,
+				},
 				withoutMechanics(enabled),
 			),
 			...done,
-		});
+		}),
+	);
 }
 
 // ─── the teacher's question tools (quiz carries the position field) ──────────
@@ -444,23 +452,30 @@ export function createTeacherTools(
 	const quizzing: Record<string, AgentTool<any>> =
 		mechanics === "free" ? { explain: teachExplainToolFor(ctx) } : { quiz: teachQuizToolFor(ctx) };
 	// healToolRecord — same standard as the prober's registry (above).
-	return healToolRecord(
-		filterEnabledTools(
-			{
-			...quizzing,
-			ask_user_question: askUserQuestionTool,
-			// The learner-filesystem set is always-on (user-decided 2026-09,
-			// sources v1): the teacher locates and reads learner-referenced
-			// files on its own terms — nothing auto-injects. Read-only by
-			// construction (fs-shared.ts).
-			read: readTool,
-			ls: lsTool,
-			find: findTool,
-			grep: grepTool,
-			...planTools(ctx),
-			...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn, searchAvailable: ctx.searchAvailable }),
-		},
-		withoutMechanics(enabled),
+	// THE SERVER-TRIAL GATE, registry layer (core/server-trial.ts): applied
+	// LAST, after the user-settings filter — same reasoning as the prober's
+	// registry above (filterServerTrialTools never consults `enabled`, so no
+	// settings delta can re-enable a blocked tool). A no-op when
+	// LH_SERVER_TRIAL is unset.
+	return filterServerTrialTools(
+		healToolRecord(
+			filterEnabledTools(
+				{
+				...quizzing,
+				ask_user_question: askUserQuestionTool,
+				// The learner-filesystem set is always-on (user-decided 2026-09,
+				// sources v1): the teacher locates and reads learner-referenced
+				// files on its own terms — nothing auto-injects. Read-only by
+				// construction (fs-shared.ts).
+				read: readTool,
+				ls: lsTool,
+				find: findTool,
+				grep: grepTool,
+				...planTools(ctx),
+				...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn, searchAvailable: ctx.searchAvailable }),
+			},
+			withoutMechanics(enabled),
+			),
 		),
 	);
 }

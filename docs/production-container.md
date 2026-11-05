@@ -1,5 +1,7 @@
 # Production container with persistent sessions
 
+For the owner-approved reduced deployment, use the [private trial guide](private-trial.md). Its disabled-tool profile and trusted ingress replace the full milestone gates for that trial. The base-container instructions below remain isolated packaging guidance, not permission to expose an unrestricted app.
+
 This packages the existing browser app for local testing. It does **not** approve live installation or remote access. Security/advisory, filesystem/network authority, real demo-browser, and ingress gates from [the baseline](server-baseline.md#blockers-and-next-ticket-boundaries) remain open. Web mode has no user login or per-browser learner isolation. Loopback publication is not protection against hostile local software or DNS rebinding.
 
 ## Build

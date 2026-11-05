@@ -10,6 +10,7 @@ import { backgroundCaptureStream, createBackgroundCapture, type BackgroundCaptur
 import type { PdfResult, PdfToolInput } from "../../core/contracts.ts";
 import { getHeadless, type HeadlessApi } from "./headless.ts";
 import { pdfExtract, pdfInfo, pdfProbe, pdfSearch, type PdfSearchHit } from "./pdf-ops.ts";
+import { isServerTrialEnabled } from "../../core/server-trial.ts";
 
 /**
  * The pdf-reader sub-agent (sources v0, 2026-09): reads a learner-provided
@@ -170,6 +171,22 @@ export async function runPdfReaderAgent(
 	const headless = opts.headless ?? getHeadless();
 	const maxIterations = opts.maxIterations ?? MAX_ITERATIONS;
 	const pdfPath = resolveSourcePath(input.path);
+
+	// THE SERVER-TRIAL GATE, direct-entrypoint layer (core/server-trial.ts):
+	// the runner already refuses "pdf" jobs before this is ever called —
+	// this guard covers any other caller, so no disk read (not even a stat)
+	// happens for a PDF-reading call under the trial no matter the call
+	// path. Local sources and web-fetched ones both ride the "pdf" kind
+	// (local+remote), so both are covered by the same check.
+	if (isServerTrialEnabled()) {
+		return {
+			path: pdfPath,
+			question: input.question,
+			brief: "PDF failed: PDF reading is disabled in this server trial (LH_SERVER_TRIAL=1)",
+			pagesRead: [],
+			pagesConsulted: [],
+		};
+	}
 
 	// Deterministic upfront failure: unreadable / unparseable
 	// for renders — the brief never starts on a broken source.
