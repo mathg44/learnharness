@@ -24,6 +24,7 @@ import { readTool } from "./tools/read.ts";
 import { lsTool } from "./tools/ls.ts";
 import { findTool } from "./tools/find.ts";
 import { grepTool } from "./tools/grep.ts";
+import { createShowImageTool } from "./tools/show-image.ts";
 import { healToolRecord } from "./tools/heal.ts";
 import type { GraphStore } from "../core/ports.ts";
 
@@ -31,7 +32,7 @@ export { jobTools };
 export type { ProbeDoneContext } from "./tools/probe.ts";
 
 /**
- * The agent-split tool composition (docs/probe-teach-split.md §1): the
+ * The agent-split tool composition (docs/archive/probe-teach-split.md §1): the
  * PROBER and the TEACHER are different agents with different tool sets.
  * The question tools share a NAME but are genuinely DIFFERENT tools —
  * the prober's quiz has NO nodeId field at all (its declaration is built
@@ -452,29 +453,23 @@ export function createTeacherTools(
 	const quizzing: Record<string, AgentTool<any>> =
 		mechanics === "free" ? { explain: teachExplainToolFor(ctx) } : { quiz: teachQuizToolFor(ctx) };
 	// healToolRecord — same standard as the prober's registry (above).
-	// THE SERVER-TRIAL GATE, registry layer (core/server-trial.ts): applied
-	// LAST, after the user-settings filter — same reasoning as the prober's
-	// registry above (filterServerTrialTools never consults `enabled`, so no
-	// settings delta can re-enable a blocked tool). A no-op when
-	// LH_SERVER_TRIAL is unset.
+	// Apply the trial restrictions last so settings cannot restore blocked tools.
 	return filterServerTrialTools(
 		healToolRecord(
 			filterEnabledTools(
 				{
-				...quizzing,
-				ask_user_question: askUserQuestionTool,
-				// The learner-filesystem set is always-on (user-decided 2026-09,
-				// sources v1): the teacher locates and reads learner-referenced
-				// files on its own terms — nothing auto-injects. Read-only by
-				// construction (fs-shared.ts).
-				read: readTool,
-				ls: lsTool,
-				find: findTool,
-				grep: grepTool,
-				...planTools(ctx),
-				...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn, searchAvailable: ctx.searchAvailable }),
-			},
-			withoutMechanics(enabled),
+					...quizzing,
+					ask_user_question: askUserQuestionTool,
+					// Read-only learner-file tools remain available outside trial mode.
+					read: readTool,
+					ls: lsTool,
+					find: findTool,
+					grep: grepTool,
+					show_image: createShowImageTool(ctx),
+					...planTools(ctx),
+					...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn, searchAvailable: ctx.searchAvailable }),
+				},
+				withoutMechanics(enabled),
 			),
 		),
 	);

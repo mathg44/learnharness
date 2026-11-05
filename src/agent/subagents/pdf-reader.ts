@@ -168,19 +168,11 @@ export async function runPdfReaderAgent(
 	input: PdfReaderInput,
 	opts: PdfReaderOptions = {},
 ): Promise<PdfResult> {
-	const headless = opts.headless ?? getHeadless();
 	const maxIterations = opts.maxIterations ?? MAX_ITERATIONS;
-	const pdfPath = resolveSourcePath(input.path);
-
-	// THE SERVER-TRIAL GATE, direct-entrypoint layer (core/server-trial.ts):
-	// the runner already refuses "pdf" jobs before this is ever called —
-	// this guard covers any other caller, so no disk read (not even a stat)
-	// happens for a PDF-reading call under the trial no matter the call
-	// path. Local sources and web-fetched ones both ride the "pdf" kind
-	// (local+remote), so both are covered by the same check.
+	// Refuse before path resolution, which now checks filesystem access.
 	if (isServerTrialEnabled()) {
 		return {
-			path: pdfPath,
+			path: input.path,
 			question: input.question,
 			brief: "PDF failed: PDF reading is disabled in this server trial (LH_SERVER_TRIAL=1)",
 			pagesRead: [],
@@ -188,12 +180,20 @@ export async function runPdfReaderAgent(
 		};
 	}
 
-	// Deterministic upfront failure: unreadable / unparseable
-	// for renders — the brief never starts on a broken source.
-	const openError = await probeReadable(pdfPath);
+	let pdfPath = input.path;
+	let openError: string | null;
+	// Source denial is an ordinary upfront PDF failure, before parsing,
+	// rendering or any model request (including direct reader invocations).
+	try {
+		pdfPath = resolveSourcePath(input.path);
+		openError = await probeReadable(pdfPath);
+	} catch (err) {
+		openError = err instanceof Error ? err.message : String(err);
+	}
 	if (openError) {
 		return { path: pdfPath, question: input.question, brief: `PDF failed: ${openError}`, pagesRead: [], pagesConsulted: [] };
 	}
+	const headless = opts.headless ?? getHeadless();
 	// No Chrome gate (Wave E, 2026-10-10): pdf_render is native now
 	// (pdfjs paints into @napi-rs/canvas in-process) — the whole pdf-reader
 	// runs browser-free; text tools always worked without one.
