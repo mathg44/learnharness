@@ -4,7 +4,7 @@ export function isServerTrialEnabled(): boolean {
 }
 
 export const SERVER_TRIAL_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
-	"read", "ls", "find", "grep",
+	"read", "ls", "find", "grep", "show_image",
 	"research", "demo", "visual", "pdf",
 	"web_search", "web_fetch", "web_fetch_pdf",
 	"pdf_info", "pdf_extract", "pdf_search", "pdf_render",

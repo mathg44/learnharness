@@ -43,6 +43,7 @@ import { readTool } from "../src/agent/tools/read.ts";
 import { lsTool } from "../src/agent/tools/ls.ts";
 import { findTool } from "../src/agent/tools/find.ts";
 import { grepTool } from "../src/agent/tools/grep.ts";
+import { createShowImageTool } from "../src/agent/tools/show-image.ts";
 import { jobTools } from "../src/agent/tools/jobs.ts";
 import { createWebTools } from "../src/agent/tools/web.ts";
 import { createPdfReadTools } from "../src/agent/tools/pdf-read.ts";
@@ -59,7 +60,7 @@ import type { JobRecord, PdfResult, DemoResult, VisualResult, ResearchResult } f
 import type { PiEngine } from "../src/agent/models.ts";
 import { PATHS } from "../config.ts";
 
-const BLOCKED_TOOLS = ["read", "ls", "find", "grep", "research", "demo", "visual", "pdf"] as const;
+const BLOCKED_TOOLS = ["read", "ls", "find", "grep", "show_image", "research", "demo", "visual", "pdf"] as const;
 
 /** Toggle the env flag for exactly the scope of one callback, always restoring. */
 async function withTrial<T>(on: boolean, fn: () => Promise<T> | T): Promise<T> {
@@ -391,6 +392,19 @@ describe("tool registries drop the blocked tools, and settings cannot bring them
 			const keys = Object.keys(createTeacherTools(teacherCtx(chatId), undefined));
 			for (const b of BLOCKED_TOOLS) assert.ok(!keys.includes(b), `${b} must be absent`);
 			for (const must of ["quiz", "ask_user_question", "plan_init"]) assert.ok(keys.includes(must), `${must} must remain`);
+		});
+	});
+
+	it("show_image is unavailable in trial lessons and refuses direct execution", async () => {
+		await withTrial(true, async () => {
+			const chatId = trackChat(chatStore.createChat("Trial test: learner image blocked").id);
+			const directTool = createShowImageTool({ chatId, chatStore });
+			const result = await run(directTool, { path: "/definitely/does/not/exist.png" });
+			assert.equal(result.isError, true);
+			assert.match((result.content[0] as { text: string }).text, /server trial/);
+			assert.equal((result.details as { tool: string }).tool, "show_image");
+			assert.equal(chatStore.getChat(chatId)!.imageSnapshots, undefined);
+			assert.ok(!("show_image" in createTeacherTools(teacherCtx(chatId), undefined)));
 		});
 	});
 

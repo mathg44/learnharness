@@ -4,7 +4,7 @@ This is the reduced first-use deployment, not the original full server-hardening
 
 ## Restrictions
 
-`LH_SERVER_TRIAL=1` disables agent filesystem tools, web research, PDF-reader jobs, generated demos, and visual workers. Registry, execution, dispatch, recovery, and worker checks enforce this even if Settings still shows an optional tool as enabled. Uploaded PDF notes can still be converted into graph material; that is not a retained-PDF teaching library. Server-path attachments and image reads through the disabled `read` tool are unavailable.
+`LH_SERVER_TRIAL=1` disables agent filesystem tools, web research, PDF-reader jobs, generated demos, and visual workers. Registry, execution, dispatch, recovery, and worker checks enforce this even if Settings still shows an optional tool as enabled. Uploaded PDF notes can still be converted into graph material; that is not a retained-PDF teaching library. Server-path attachments and image reads through the disabled `read` and `show_image` tools are unavailable.
 
 The existing Docker isolation remains: non-root, read-only application files, dropped capabilities, dedicated data/auth volumes, and no host-home or Docker-socket mounts. Only host loopback publishes port 3000. Do not change that to a wildcard, LAN, or Tailscale address.
 
@@ -76,6 +76,44 @@ The final trial suite passed all 3,222 tests, production build, typecheck and li
 Live checks used the owner's authorized proxy with synthetic learning content: streamed GPT 6.1 Sol question/answer turns with saved confidence and reasoning, a practice problem, and uploaded-note extraction/audit through the configured Opus 5.5 background slot. The saved lesson survived container replacement. A real Chromium browser opened the HTTPS lesson and rendered mathematics without page errors. These checks do not prove model quality or every provider capability.
 
 The owner confirmed that the trial works and model communication succeeds. Exhaustive interruption testing, a host reboot, daily backup/restore automation, update rollback exercises, and restoring optional tools are deferred. They are not trial-launch blockers.
+
+## Upstream v0.5.0 merge verification
+
+This is a source update, not a deployment. Upstream `713377f` supplies v0.5.0. The merge retains the trial access gate, container restrictions and dependency fixes. Its new `show_image` file reader is blocked in trial mode at both declaration and execution. Outside trial mode, upstream image and folder features remain available.
+
+### Prerequisites
+
+- [ ] Use the merge branch, Node 26 and the locked dependencies. Leave the running trial, its volumes and private configuration untouched.
+- [ ] Use synthetic records, an empty auth file and a free loopback port 3001. Do not load provider credentials, subscription profiles or `.env.local`. Do not submit a teaching question during these checks.
+
+### Browser check
+
+- [ ] Start an isolated browser-mode development server from a clean checkout without `.env.local`:
+
+  ```bash
+  scratch=$(mktemp -d /tmp/lh-merge-manual.XXXXXX)
+  chmod 700 "$scratch"
+  mkdir -p "$scratch/home" "$scratch/data"
+  printf '{}\n' > "$scratch/auth.json"
+  chmod 600 "$scratch/auth.json"
+  env -i PATH="$PATH" HOME="$scratch/home" \
+    LH_DATA_DIR="$scratch/data" LH_AUTH_FILE="$scratch/auth.json" \
+    NEXT_TELEMETRY_DISABLED=1 \
+    npm run dev -- --hostname 127.0.0.1 --port 3001
+  ```
+
+- [ ] Open `http://127.0.0.1:3001/`. Expect a fresh learner profile, not the trial's saved lessons.
+- [ ] Hover over the composer paperclip. Expect the browser-only explanation and an unavailable attachment button, not a host file picker or upload. Native file/folder selection remains desktop-only.
+- [ ] Open Settings, then Agent, then Prompts. Expect a Practice prompt group. Open the Graph settings and expect an Extraction switch. Do not enable providers or start extraction.
+- [ ] Stop only this development server with Ctrl+C. This check runs without trial mode so the local browser can inspect the upstream interface. It does not verify live ingress.
+
+### Trial checks without a model request
+
+- [ ] Restart that isolated server with the same paths and these additional environment values: `LH_SERVER_TRIAL=1`, `LH_SERVER_TRIAL_OWNER=owner@example.com`, and `LH_SERVER_TRIAL_ORIGIN=https://trial.example.ts.net`.
+- [ ] Request `http://127.0.0.1:3001/api/chats/synthetic/images/synthetic` without identity headers. Expect HTTP 403, including for this new upstream image route.
+- [ ] Repeat with `Host: trial.example.ts.net`, `Tailscale-User-Login: owner@example.com`, `X-Forwarded-Host: trial.example.ts.net`, and `X-Forwarded-Proto: https`. Expect HTTP 404 for the nonexistent snapshot, not access to another profile.
+- [ ] Stop the isolated server before running tests so only one process writes the scratch profile. Run `node --import tsx --test tests/server-trial-tools.test.ts` with `NODE_ENV=test`, the disposable `LH_DATA_DIR`/`LH_AUTH_FILE`, and the clean environment above. Expect `show_image` to be absent from trial teacher tools and direct execution to return a trial refusal. The same suite checks that normal teacher tools remain available outside trial mode. No provider request is needed.
+- [ ] Remove only the disposable scratch directory after inspection. Deployment, a trial restart and real-provider verification still need separate owner approval.
 
 ## Next session
 
