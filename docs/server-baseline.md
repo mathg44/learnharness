@@ -179,6 +179,35 @@ Remaining moderate package entries are propagated through ESLint and Electron pa
 
 No fixes were silently applied. Proposed targeted updates need owner approval and the full behavior suite, build, provider payload, and relevant native/browser gates. The current audit is evidence for those bounded tickets, not an acceptance of all risks.
 
+## Compatible dependency patches after v0.5.0
+
+This update starts from `8c0a882` and changes only compatible lockfile resolutions. Manifest ranges and existing overrides remain unchanged. It does not change application code or deploy the app. The advisory assessment above records the earlier baseline, not the current lockfile.
+
+| Dependency | Previous resolution | Patched resolution |
+| --- | --- | --- |
+| `concurrently` | 10.0.5 | 10.0.6 |
+| Its exact `shell-quote` dependency | 1.9.0 | 1.12.0 |
+| `fast-uri` | 3.1.8 | 3.1.9 |
+| `source-map-js` | 1.2.1 | 1.2.2 |
+| Vulnerable `brace-expansion` 1.x copies | 1.1.18 | 1.1.21 |
+| `brace-expansion` 5.x | 5.0.9 | 5.0.12 |
+
+Concurrently 10.0.6 admits the fixed shell-quote through its own published exact dependency, without an override. All selected resolutions fit their declared parent ranges and Node 26. Unaffected brace-expansion 2.1.7 copies remain unchanged. The lockfile diff contains nine changed package entries and no added or removed packages.
+
+The fresh audit after these patches reported 13 affected package entries, eight moderate and five high, with no critical entries. The preceding audit reported 18 entries, including two critical entries for one shell-quote advisory propagated through concurrently. The selected package advisories are absent from the new report. Counts are date-dependent, not proof of exploitability or complete dependency safety.
+
+Chromium BiDi's Zod 3 dependency, minimatch and linkify-it remain deferred. Their fixes need separate parent compatibility work. Do not force nested major substitutions or use `npm audit fix --force`. No live provider or deployment operation is part of this update.
+
+### Operator verification
+
+No user-facing verification is required.
+
+- [ ] Use the committed patch branch with Docker and enough temporary disk space for a clean Node 26 install/build. Leave the running trial and its data/auth volumes untouched.
+- [ ] Inspect `git diff 8c0a882...HEAD -- package.json package-lock.json`. Expect no manifest changes and only the nine approved lock entries listed above.
+- [ ] Run `bash scripts/check-server-baseline.sh HEAD`. It archives committed source into disposable containers with separate data/auth/home paths. Expect installation, tests, typecheck, lint, build and subscription smoke checks to pass. One existing lint warning is expected. The audit remains report-only.
+- [ ] Inspect the printed evidence directory's `audit.json`. Expect no entries for `concurrently`, `shell-quote`, `fast-uri`, `source-map-js` or `brace-expansion`; record any new advisories separately. Remaining advisory entries are not accepted as fixed by this patch.
+- [ ] For a focused development CLI check, use a separate disposable checkout with its locked dependencies installed. Run `node node_modules/concurrently/dist/bin/index.js --raw 'node -e "console.log(1)"' 'node -e "console.log(2)"'`. Expect both numbers, in either order, and exit 0. This must not start Next, Electron or a provider request.
+
 ## Privacy and history review
 
 The checkout is not shallow. The review enumerated all locally reachable refs/history, 11,243 objects and 5,497 unique blobs, not just the current diff. Filename checks found no committed root app data/auth/subscription/env/upload/backup profile paths. All blobs were scanned for private-key blocks, GitHub token forms, AWS access IDs, and long provider-key forms; no matches were found. This is a heuristic review, not a guarantee against every possible secret format, arbitrary personal prose, or unavailable remote/deleted history. Repeat it before an authorized push, including any later commits.
