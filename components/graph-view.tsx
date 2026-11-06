@@ -67,7 +67,7 @@ import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, use
 import { NotesImportControl, NotesImportErrors, NotesImportNotices, useNotesImport } from "@/components/notes-import.tsx";
 import Link from "next/link";
 import { FileTextIcon, ListTreeIcon, Loader2Icon, SearchIcon, SettingsIcon, WaypointsIcon } from "lucide-react";
-import { incrementalLayout, propositionSessionHref, type GraphCostSummary, type GraphNode, type GraphSnapshot } from "@/src/core";
+import { incrementalLayout, propositionSessionHref, type GraphCostSummary, type GraphNode, type GraphSnapshot, type RecentRun, type StageCost } from "@/src/core";
 import { planCostLabel } from "@/components/usage-format";
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
@@ -301,8 +301,14 @@ function fmtRunCost(dollars: number | null, providers: readonly string[] = []): 
 function graphProviders(value: { subscriptionRuns?: number; subscriptionProviders?: string[] }): string[] {
 	return value.subscriptionProviders ?? ((value.subscriptionRuns ?? 0) > 0 ? ["ChatGPT"] : []);
 }
+/** The stages the UI shows, in pipeline order. PDF transcription appears
+ *  only when the summary recorded it. */
+function displayStages(costs: Pick<GraphCostSummary, "stages">): StageCost[] {
+	const { transcription, extraction, audit } = costs.stages;
+	return transcription ? [transcription, extraction, audit] : [extraction, audit];
+}
 function graphUsageLabel(costs: Pick<GraphCostSummary, "stages">): string {
-	const stages = [costs.stages.extraction, costs.stages.audit];
+	const stages = displayStages(costs);
 	const providers = [...new Set(stages.flatMap(graphProviders))];
 	const priced = stages.some((stage) => stage.runs - stage.unpricedRuns - (stage.subscriptionRuns ?? 0) > 0);
 	const dollars = displayCostTotals(costs).totalDollars;
@@ -311,7 +317,7 @@ function graphUsageLabel(costs: Pick<GraphCostSummary, "stages">): string {
 
 /**
  * The cost figures the UI DISPLAYS (owner refinement round, 2026-09-24):
- * extraction + audit only. Cluster naming is dead — labels are session
+ * PDF transcription (when recorded), extraction and audit. Cluster naming is dead — labels are session
  * titles / file names — so the core's naming fold (and its historical
  * spend) is deliberately not shown anywhere: the pill and the panel must
  * agree, and both read THIS, never GraphCostSummary.totalDollars.
@@ -322,12 +328,23 @@ export function displayCostTotals(costs: Pick<GraphCostSummary, "stages">): {
 	totalDollars: number;
 	unpricedRuns: number;
 } {
-	// The two live stages (the spine came and went on one day,
+	// The live stages (the spine came and went on one day,
 	// 2026-09-30 — digest-aware extraction replaced it).
+	const stages = displayStages(costs);
 	return {
-		totalDollars: costs.stages.extraction.dollars + costs.stages.audit.dollars,
-		unpricedRuns: costs.stages.extraction.unpricedRuns + costs.stages.audit.unpricedRuns,
+		totalDollars: stages.reduce((n, stage) => n + stage.dollars, 0),
+		unpricedRuns: stages.reduce((n, stage) => n + stage.unpricedRuns, 0),
 	};
+}
+
+/** A recent run that used a subscription but priced nothing still shows
+ *  how many of its stages are unknown. Runs that recorded transcription
+ *  carry the count; older two-stage runs imply one unknown stage when
+ *  exactly one stage was a subscription. */
+function recentUnpricedSuffix(run: RecentRun): string {
+	if (run.dollars !== null || !run.subscriptionRuns) return "";
+	const unpriced = run.unpricedStages ?? (run.subscriptionRuns === 1 ? 1 : 0);
+	return unpriced > 0 ? ` +${unpriced} unpriced` : "";
 }
 
 /**
@@ -373,20 +390,27 @@ export function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
 }
 
 /**
- * The cost control's expanded panel: stage totals (extraction / audit —
+ * The cost control's expanded panel: stage totals (PDF transcription when
+ * recorded, extraction, audit —
  * dollars headline, tokens secondary) + the recent-runs list.
  * Presentational: the fold happens server-side (core/cost-summary.ts);
  * dollars are inferred read-time, never stored. Cluster naming is GONE
  * from the panel (owner refinement round, 2026-09-24): labels are session
  * titles / file names now, the namer is dead, and its historical spend is
  * not tracked anymore — the headline sums the displayed stages only and
- * naming-kind runs never reach the list.
+ * naming-kind runs never reach the list. Exported for render tests.
  */
-function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
-	const stageRows: [string, GraphCostSummary["stages"]["extraction"]][] = [
+export function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
+	const { transcription } = costs.stages;
+	// When transcription is recorded, a stage with zero runs means only
+	// standalone transcription runs exist; an empty "Extraction —" row would
+	// read as unknown spend, so it is hidden.
+	const allRows: [string, StageCost][] = [
+		...(transcription ? [["PDF transcription", transcription] as [string, StageCost]] : []),
 		["Extraction", costs.stages.extraction],
 		["Audit", costs.stages.audit],
 	];
+	const stageRows = allRows.filter(([, stage]) => !transcription || stage.runs > 0);
 	// The displayed figures come from displayCostTotals (naming excluded —
 	// the pill and this panel must agree).
 	const { unpricedRuns } = displayCostTotals(costs);
@@ -433,7 +457,7 @@ function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
 									</span>
 								)}
 							</span>
-							<span className="shrink-0 tabular-nums">{fmtRunCost(run.dollars, graphProviders(run))}{run.dollars === null && run.subscriptionRuns === 1 ? " +1 unpriced" : ""}</span>
+							<span className="shrink-0 tabular-nums">{fmtRunCost(run.dollars, graphProviders(run))}{recentUnpricedSuffix(run)}</span>
 						</div>
 					))}
 			</div>

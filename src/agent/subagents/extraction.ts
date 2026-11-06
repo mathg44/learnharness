@@ -15,6 +15,7 @@ import {
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
 import { withBgLlmSlot } from "./bg-llm-semaphore.ts";
+import { transcribePdf } from "./pdf-transcription.ts";
 import type {
 	AuditVerdicts,
 	CallUsage,
@@ -627,7 +628,7 @@ function runAuditor(
  *  audit+merge critical section is queued behind another job's; the
  *  extractor is done but the auditor may not start until the graph is
  *  stable. */
-export type ExtractionPhase = "queued" | "extracting" | "waiting" | "auditing" | "merging";
+export type ExtractionPhase = "queued" | "transcribing" | "extracting" | "waiting" | "auditing" | "merging";
 
 /** One in-flight pipeline run. Module-level: one process, one registry.
  *  Exported for the status payload's consumer typing (the dock). */
@@ -655,6 +656,7 @@ export interface RunningExtraction {
 	usage: {
 		extractor?: ExtractionStageUsage;
 		auditor?: ExtractionStageUsage;
+		transcription?: ExtractionStageUsage;
 	};
 	/** True-cancellation handle (the dock's abort button): one controller per
 	 *  run, shared across phases; abort() cancels the in-flight model call. */
@@ -724,6 +726,7 @@ export interface ExtractionModels {
 	 *  engineFor chain (production wires no direct values). */
 	extractor?: PiEngine;
 	auditor?: PiEngine;
+	pdfReader?: PiEngine;
 	/** Settings-resolved engine per role — the same slot treatment the
 	 *  job runner got, read FRESH per stage call (a settings PUT between
 	 *  stages lands). BYOK (owner, 2026-09-22): the chain (role override →
@@ -754,8 +757,10 @@ export interface NotesImportInput {
 	/** The source's file path — its identity (deterministic src id) AND its
 	 *  provenance label in the detail card. */
 	filePath: string;
-	/** The file's raw content, VERBATIM — any format. */
+	/** The file's raw text. For PDF uploads this is replaced by transcription. */
 	text: string;
+	/** Uploaded PDF bytes, never a server filesystem path. Every page is transcribed. */
+	pdf?: Uint8Array;
 }
 
 /** A notes import did not finish. Earlier graph writes and billed usage are
@@ -813,11 +818,12 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	 *  found unset (test values count as configured — they ARE engines),
 	 *  and whether a configured stage's provider key is gone (provider-key
 	 *  interlude, 2026-09-25) — both refuse BEFORE any batch runs. */
-	function refuseIfStagesUnready(): void {
-		const stages: readonly [ModelRole, PiEngine | undefined][] = [
+	function refuseIfStagesUnready(includePdf = false): void {
+		const stages: [ModelRole, PiEngine | undefined][] = [
 			["extractor", stageEngine("extractor", deps.extractor)],
 			["auditor", stageEngine("auditor", deps.auditor)],
 		];
+		if (includePdf) stages.push(["pdfReader", stageEngine("pdfReader", deps.pdfReader)]);
 		const missing = new Set<ModelSlotName>();
 		for (const [role, engine] of stages) if (!engine) missing.add(ROLE_SLOT[role]);
 		if (missing.size > 0) {
@@ -875,7 +881,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	}
 
 	/** Accumulate one billed step into the run's registry entry (live). */
-	function recordStep(jobKey: string, stage: "extractor" | "auditor", usage: CallUsage, model: string): void {
+	function recordStep(jobKey: string, stage: "extractor" | "auditor" | "transcription", usage: CallUsage, model: string): void {
 		const run = runningExtractions.get(jobKey);
 		if (!run) return; // not running (tests driving stages directly)
 		run.usage[stage] ??= { model, steps: [] };
@@ -1045,6 +1051,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			stages: {
 				extractor: run.usage.extractor ?? { model: "unknown", steps: [] },
 				auditor: run.usage.auditor ?? { model: "unknown", steps: [] },
+				...(run.usage.transcription ? { transcription: run.usage.transcription } : {}),
 			},
 		};
 		if (run.kind === "notes") graphStore.appendSourceUsage(run.chatId, entry);
@@ -1428,6 +1435,33 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		}
 	}
 
+	/** Finish every page before any graph extraction. The source lock remains held
+	 * across transcription and extraction; failed/aborted attempts retain billed usage. */
+	async function transcribeNotesPdf(id: string, input: NotesImportInput): Promise<string> {
+		const engine = stageEngine("pdfReader", deps.pdfReader);
+		if (!engine) throw new ModelsNotConfiguredError([ROLE_SLOT.pdfReader]);
+		const t0 = performance.now();
+		setPhase(id, "transcribing", "notes", input.filePath);
+		const run = runningExtractions.get(id)!;
+		try {
+			return await transcribePdf(input.pdf!, {
+				engine,
+				abortSignal: run.controller.signal,
+				onUsage: (usage) => recordStep(id, "transcription", callUsage(usage), `${engine.model.provider}:${engine.model.id}`),
+				onPage: (page, total) => {
+					run.part = { i: page, n: total };
+					emit("activity-changed", {});
+				},
+			});
+		} finally {
+			try {
+				if (run.usage.transcription) persistRunUsage(id, Math.round(performance.now() - t0), undefined);
+			} finally {
+				finishExtraction(id);
+			}
+		}
+	}
+
 	/** Every explicit import processes the whole file. Identity, source digest,
 	 * auditor and usage history remain source-scoped; this is not exactly-once. */
 	async function importNotes(input: NotesImportInput): Promise<EmissionStats> {
@@ -1436,12 +1470,14 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		if (inFlight.has(id)) throw new NotesImportError("busy", { nodes: 0, chains: 0 }, "This file is already being imported. Try again when it finishes.");
 		inFlight.add(id);
 		try {
+			if (input.pdf) refuseIfStagesUnready(true);
 			const importedAt = new Date().toISOString();
 			graphStore.upsertSource({ id, filePath: input.filePath, importedAt });
-			return await runNotesExtraction({ id, ...input, importedAt });
+			const text = input.pdf ? await transcribeNotesPdf(id, input) : input.text;
+			return await runNotesExtraction({ id, filePath: input.filePath, text, importedAt });
 		} catch (err) {
 			if (err instanceof NotesImportError || err instanceof ModelsNotConfiguredError || err instanceof ProviderKeyMissingError) throw err;
-			throw new NotesImportError("failed", { nodes: 0, chains: 0 }, err instanceof Error ? err.message : String(err), { cause: err });
+			throw new NotesImportError(err instanceof Error && err.name === "AbortError" ? "aborted" : "failed", { nodes: 0, chains: 0 }, err instanceof Error ? err.message : String(err), { cause: err });
 		} finally {
 			inFlight.delete(id);
 		}

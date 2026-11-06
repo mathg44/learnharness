@@ -67,9 +67,12 @@ export function useChatSession({ chatId, initialMessages, initialError, initiall
 	// RSC fetches included) — the multi-session navigation freeze. Aborting
 	// costs nothing: navigating back replays the compacted log + live tail.
 	useEffect(() => {
+		// attachView completes an admission that landed during a StrictMode
+		// replay; detachView releases the stream like stop().
+		model.attachView();
 		if (initiallyInFlight) void model.resumeStream(false);
 		return () => {
-			model.stop();
+			model.detachView();
 		};
 	}, [initiallyInFlight, model]);
 

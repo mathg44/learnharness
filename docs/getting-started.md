@@ -33,9 +33,23 @@ Sessions are saved locally, including earlier messages when context is compacted
 
 Audio streams from your browser directly to Deepgram using a short-lived token. A `403 Insufficient permissions` error while obtaining that token can mean the key's role is insufficient.
 
-## Use local files in a session
+## Attach material to a session
 
-In the desktop app, use the paperclip's **Files** or **Folder** choice, or drag files/folders into the content area, to insert their local paths. Files supports any file type and multiple selections; Folder attaches one directory path, including an empty folder, without expanding or reading its contents. Newly picked or dropped known folders get a trailing directory separator so their Folder icon survives saved messages and reloads; files stay unchanged. Older unmarked paths are not retrospectively classified. The agent can then locate/read supported content on the machine running LearnHarness under the existing file-access guards; attaching a path does not grant permissions. This is **not an upload**: originals stay where they are. Ordinary browsers cannot expose these local paths through the picker or drag-and-drop; you can paste a full path instead.
+### Browser uploads
+
+When you use LearnHarness on a remote server, use the paperclip or drag files into the session to upload files from your computer. PDFs, supported raster images, and UTF-8 text files such as Markdown and source code are supported. Paste a screenshot or copied image into the composer to add it alongside files you've already selected. Folder uploads and Office documents are not supported here.
+
+Files stay in the draft until you press Send. Review the filenames and image previews, remove anything you do not want, then send with or without a text message. Upload or processing failures keep the draft available for retry. Attachments can be sent when the current reply has finished. Text-only messages can still steer an active reply. Question-answer fields do not accept uploads.
+
+The server reads text and normalizes images locally. It transcribes every PDF page through the session's selected model and existing connection, not a separate service or the Vision slot. Your model must support images for PDFs or pictures. Transcription uses that connection's normal usage allowance; the app does not switch providers or fall back to API billing. Check important PDF details against the original, since transcription can misread handwriting, equations, and labels and does not preserve drawings.
+
+A message can carry up to 100 attachments, limited to 25 MiB in total. PDFs are limited to 1,000 pages. Images use the app's existing size and dimension limits. Unsupported or oversized content is refused, not silently shortened.
+
+Processed contents are saved with the session on the server and survive reloads and server restarts. Original PDFs are not retained for download. Deleting the session removes its saved attachment content. Session attachments do not run the graph's file-import flow. This works in the private server trial without enabling server filesystem tools.
+
+### Desktop file paths
+
+In the desktop app, use the paperclip's **Files** or **Folder** choice, or drag files/folders into the content area, to insert their local paths. Files supports any file type and multiple selections; Folder attaches one directory path, including an empty folder, without expanding or reading its contents. Newly picked or dropped known folders get a trailing directory separator so their Folder icon survives saved messages and reloads; files stay unchanged. Older unmarked paths are not retrospectively classified. The agent can then locate/read supported content on the machine running LearnHarness under the existing file-access guards; attaching a path does not grant permissions. This is **not an upload**: originals stay where they are. Ordinary browsers cannot expose these local paths through the picker or drag-and-drop. Use browser uploads instead when the original is on your computer and the app runs on a server.
 
 The teacher can show a local raster image or request an annotated visual based on it. Displayed/annotated pictures are saved as session-owned snapshots, so those saved results no longer depend on the original file. This does not snapshot every file attachment. Offline regression tests cover snapshot/payload behavior, not the quality of model-generated annotations.
 
@@ -43,11 +57,13 @@ File tools are read-only but have broad filesystem access under the server's use
 
 ## Extract into the graph
 
-For lessons, attach material to a session instead. Use the graph's **Extract files… → Files** or **Folder** picker for Markdown, plain text, or PDFs. This is a separate import flow, not the session's path attachments. Each supported file is uploaded for processing; folders organize imported sources.
+For lessons, attach material to a session instead. Use the graph's **Extract files… → Files** or **Folder** picker for Markdown, plain text, or PDFs. This is a separate import flow, not a session attachment. Each supported file is uploaded for processing; folders organize imported sources.
 
 - Files are limited to **25 MiB each**. Imports queue independently, with up to three files in flight.
-- PDF conversion is local text extraction, not OCR. Image-only pages are skipped and counted; scanner text can be inaccurate. Check the import's notices.
-- Imported text then goes through model-based proposition/chain extraction. Local PDF conversion does not make the whole import offline.
+- PDFs are limited to **1,000 pages**. Every page is rendered locally and sent to the configured PDF-reader model, normally the Vision slot, for transcription. This includes typed pages, scans, and handwriting. Configure an image-capable model and its connection before importing.
+- Transcription preserves page order and requests text, equations, tables, and diagram labels. Uncertain readings use `[unclear]`; recognized blank pages use `[blank page]`. Models can still miss or misread details. Check the import's notices and compare important material with the original.
+- Page images go to your configured provider and can incur usage charges. Transcription usage, including failed attempts, appears under **PDF transcription** in graph costs. Markdown and plain-text imports do not use this step.
+- The complete transcription then goes through model-based proposition/chain extraction. If any page fails or its response is truncated, that PDF fails before graph extraction rather than silently skipping pages.
 - Completed chunks survive later failures. Retry is explicit and reprocesses the file; unchanged content is not automatically skipped. The file queue does not survive a page reload.
 
 The graph stores propositions and reasoning chains with source provenance, **not mastery scores**. A proposition's presence is not proof that you understood or retained it. Automatic session extraction can be disabled independently of graph rendering.

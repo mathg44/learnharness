@@ -45,6 +45,23 @@ test("mixed session totals retain known API dollars and subscription labels alon
 	assert.equal(callCost(step, cli.model), null, "CLI stays unpriced in accounting");
 });
 
+test("attachment-only Claude Code preparation keeps the CLI label before any turn", () => {
+	const pricing = sessionCost({ turns: [], attachmentUsage: [{ id: "prep", attachmentId: "pdf", at: "2026-10-28T00:00:00Z", model: "claude-code:sonnet", steps: [step] }] });
+	assert.equal(pricing.unpriced, 1); assert.equal(pricing.cliBilled, true);
+	const html = renderToStaticMarkup(<StatsBar chatId="fixture" turns={[]} pricing={pricing} />);
+	assert.match(html, /data-testid="stats-cost">CLI<\/span>/);
+	assert(!html.includes("$0"));
+});
+
+test("attachment-only custom-proxy preparation stays unpriced with no CLI label", () => {
+	const pricing = sessionCost({ turns: [], attachmentUsage: [{ id: "prep", attachmentId: "pdf", at: "2026-10-28T00:00:00Z", model: "custom:claude-sonnet", steps: [step] }] });
+	assert.equal(pricing.unpriced, 1); assert.equal(pricing.cliBilled, undefined);
+	assert.equal("cliBilled" in pricing, false, "derived flag is absent unless CLI usage exists");
+	const html = renderToStaticMarkup(<StatsBar chatId="fixture" turns={[]} pricing={pricing} />);
+	assert.match(html, /data-testid="stats-cost">—<\/span>/);
+	assert(!html.includes("CLI")); assert(!html.includes("$0"));
+});
+
 test("model-catalog API and menus never advertise the CLI adapter's placeholder zero rates", () => {
 	const models = CLAUDE_CODE_MODELS.map(toModelDto);
 	assert(models.every((model) => model.cost === null));

@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import type { PDFPageProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { standardFontsDir } from "./pdf-ops";
 
 /**
@@ -537,7 +538,6 @@ async function renderPdfPages(
 	// (Skia in-process instead of a DOM canvas). Text-side pdf tools never
 	// needed a browser; now renders don't either.
 	const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-	const { createCanvas } = await import("@napi-rs/canvas");
 	const data = new Uint8Array(fs.readFileSync(path.resolve(pdfPath)));
 	// Standard-font data as a directory path (live-smoke finding 2026-09-19:
 	// without it pdfjs renders non-embedded standard fonts via fallback);
@@ -548,30 +548,32 @@ async function renderPdfPages(
 		const out: RenderedPdfPage[] = [];
 		for (const pageNo of pages) {
 			if (pageNo < 1 || pageNo > doc.numPages) continue;
-			const pg = await doc.getPage(pageNo);
-			const base = pg.getViewport({ scale: 1 });
-			const geometry = pdfCanvasGeometry(base.width, base.height, dpi);
-			const vp = pg.getViewport({ scale: geometry.scale });
-			const canvas = createCanvas(geometry.width, geometry.height);
-			const ctx = canvas.getContext("2d");
-			// pdfjs's render types speak the DOM context; @napi-rs/canvas's
-			// context is the same 2D API implemented over Skia.
-			await pg.render({
-				canvasContext: ctx as unknown as CanvasRenderingContext2D,
-				canvas: canvas as unknown as HTMLCanvasElement,
-				viewport: vp,
-			}).promise;
-			out.push({
-				page: pageNo,
-				// Skia-encoded PNG → providerSafePng for the same single-IDAT
-				// canonical form every other vision-model image gets.
-				png: providerSafePng(canvas.toBuffer("image/png")),
-			});
+			out.push({ page: pageNo, png: await renderPdfPage(await doc.getPage(pageNo), dpi) });
 		}
 		return out;
 	} finally {
 		await loadingTask.destroy().catch(() => {});
 	}
+}
+
+/** Render one open pdfjs page to a provider-safe PNG with bounded canvas
+ *  geometry. The caller owns the document and its destroy(). */
+export async function renderPdfPage(page: PDFPageProxy, dpi = 150): Promise<Buffer> {
+	const { createCanvas } = await import("@napi-rs/canvas");
+	const base = page.getViewport({ scale: 1 });
+	const geometry = pdfCanvasGeometry(base.width, base.height, dpi);
+	const viewport = page.getViewport({ scale: geometry.scale });
+	const canvas = createCanvas(geometry.width, geometry.height);
+	// pdfjs's render types speak the DOM context; @napi-rs/canvas's
+	// context is the same 2D API implemented over Skia.
+	await page.render({
+		canvasContext: canvas.getContext("2d") as unknown as CanvasRenderingContext2D,
+		canvas: canvas as unknown as HTMLCanvasElement,
+		viewport,
+	}).promise;
+	// Skia-encoded PNG → providerSafePng for the same single-IDAT
+	// canonical form every other vision-model image gets.
+	return providerSafePng(canvas.toBuffer("image/png"));
 }
 
 // ─── the real API ────────────────────────────────────────────────────────────

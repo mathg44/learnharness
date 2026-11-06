@@ -10,7 +10,9 @@
  */
 
 import type { LhMessage } from "./native-messages.ts";
+import type { PreparedSessionAttachment } from "./session-attachments.ts";
 import type {
+	AttachmentUsage,
 	ChatRecord,
 	ImageSnapshot,
 	ChatSettings,
@@ -45,6 +47,14 @@ export interface ChatStore {
 	saveMessages(id: string, messages: LhMessage[]): void;
 	/** Save a processed picture once, without changing conversation activity/order. */
 	saveImageSnapshot(id: string, snapshotId: string, image: ImageSnapshot): void;
+	/** Save one prepared browser attachment under its client id, with the
+	 *  usage that prepared it in the same write (not conversation activity:
+	 *  updatedAt stays). Optional on the port so
+	 *  partial test doubles keep compiling; the attachment service refuses
+	 *  to run without it. */
+	saveSessionAttachment?(id: string, attachment: PreparedSessionAttachment, usage?: AttachmentUsage): void;
+	/** Append one attachment-preparation usage entry, idempotent per entry id. */
+	appendAttachmentUsage?(id: string, entry: AttachmentUsage): void;
 	/** Persist the session plan tree (plan tools call this in execute). */
 	saveTree(id: string, tree: PlanTree): void;
 	/** Append one usage entry to the record's turn log (the money channel,

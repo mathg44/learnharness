@@ -2503,6 +2503,37 @@ describe("notes import completion and retry reliability", () => {
 		return true;
 	};
 
+	it("reports a truncated extractor response with model-limit guidance and preserves failed usage", async () => {
+		const ledgers = memoryLedgers();
+		const extractor = fauxEngine([fauxAssistantMessage([], { stopReason: "length" })]);
+		await assert.rejects(make(ledgers, extractor).importNotes(input), (error) => {
+			incomplete("failed", 0)(error);
+			assert.equal((error as Error).message, "The extractor hit its output token limit before submitting its result. Check the model's context and output limits in Settings, then retry.");
+			return true;
+		});
+		assert.equal(ledgers.readNodes().length, 0);
+		assert.equal(ledgers.readChains().length, 0);
+		const run = ledgers.readSources()[0]!.extractions![0]!;
+		assert.equal(run.stages.extractor.steps.length, 1);
+		assert.equal(run.stages.auditor.steps.length, 0);
+		assert.deepEqual(await make(ledgers).importNotes(input), { nodes: 1, chains: 0 });
+	});
+
+	it("does not blame an earlier truncated tool call when the terminal extractor response stops normally", async () => {
+		const ledgers = memoryLedgers();
+		const extractor = fauxEngine([
+			fauxAssistantMessage([fauxToolCall("submit_findings", { propositions: [{ id: "incomplete" }], chains: [] })], { stopReason: "length" }),
+			fauxAssistantMessage([], { stopReason: "stop" }),
+		]);
+		await assert.rejects(make(ledgers, extractor).importNotes(input), (error) => {
+			incomplete("failed", 0)(error);
+			assert.equal((error as Error).message, "the extractor never submitted findings");
+			return true;
+		});
+		assert.equal(ledgers.readNodes().length, 0);
+		assert.equal(ledgers.readSources()[0]!.extractions![0]!.stages.extractor.steps.length, 2);
+	});
+
 	it("failure followed by an unchanged retry really extracts and preserves both usage records", async () => {
 		const ledgers = memoryLedgers();
 		await assert.rejects(make(ledgers, silentModel()).importNotes(input), incomplete("failed", 0));

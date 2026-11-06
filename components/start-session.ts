@@ -1,4 +1,7 @@
 import { clearOpeningPrompt, OPENING_PROMPT_FAILURE, stashOpeningPrompt } from "./opening-prompt";
+import type { SessionAttachments } from "./session-attachments";
+
+type AttachmentDraft = Pick<SessionAttachments, "snapshot" | "prepare">;
 
 interface SessionCreation {
 	title: string;
@@ -13,8 +16,9 @@ interface SessionCreation {
 export class SessionStarter {
 	private created?: { identity: string; id: string };
 
-	async start(body: SessionCreation, fetchLike: typeof fetch, settingsIdentity?: string): Promise<string> {
-		const identity = JSON.stringify([body, settingsIdentity]);
+	async start(body: SessionCreation, fetchLike: typeof fetch, settingsIdentity?: string, attachments?: AttachmentDraft, openingText = body.title): Promise<string> {
+		const attachmentIds = attachments?.snapshot().map((item) => item.id) ?? [];
+		const identity = JSON.stringify([body, settingsIdentity, attachmentIds, openingText]);
 		if (this.created?.identity !== identity) {
 			if (this.created) clearOpeningPrompt(this.created.id);
 			this.created = undefined;
@@ -28,7 +32,8 @@ export class SessionStarter {
 			if (typeof result.id !== "string" || !/^[A-Za-z0-9_-]+$/.test(result.id)) throw new Error(OPENING_PROMPT_FAILURE);
 			this.created = { identity, id: result.id };
 		}
-		if (!stashOpeningPrompt(this.created.id, body.title)) throw new Error(OPENING_PROMPT_FAILURE);
+		const prepared = attachmentIds.length ? await attachments!.prepare(this.created.id) : [];
+		if (!stashOpeningPrompt(this.created.id, openingText, false, prepared)) throw new Error(OPENING_PROMPT_FAILURE);
 		return `/chat/${this.created.id}`;
 	}
 }

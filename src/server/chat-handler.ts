@@ -47,6 +47,8 @@ import { beginTurn, endTurn } from "./turn-liveness.ts";
 import { applyParkedDismissal } from "./dismissal-park.ts";
 import { registerTurn, rememberTurnFailure, unregisterTurn } from "./turn-runs.ts";
 import { persistTurn, triggerExtraction, TurnPersistenceError } from "./turn-service.ts";
+import { SEND_IMAGE_INPUT_ERROR } from "./session-attachments.ts";
+import { sendNeedsImageInput } from "../core/session-attachments.ts";
 import { hasProbeDone, hasUnresolvedQuestion } from "../core/native-messages.ts";
 import { composeInstructions } from "../agent/teacher-agent.ts";
 import { ensureCompacted, kickCompaction, effectiveThresholdTokens } from "./compaction.ts";
@@ -60,6 +62,7 @@ import {
 	parseChatInput,
 	questionRecoveryAppends,
 	retryDrops,
+	sentAttachments,
 	type TurnInput,
 } from "../core/input-events.ts";
 import { steerDelivered } from "../core/contracts.ts";
@@ -218,6 +221,16 @@ export async function handleChatInput(
 		}
 	}
 
+	// Attachment references resolve before any catalog refresh, compaction,
+	// or write: an unknown or oversized reference must cost nothing.
+	if (input.type === "text" && input.attachmentIds) {
+		try { sentAttachments(record, input.attachmentIds); }
+		catch (err) {
+			if (err instanceof ChatInputError) return Response.json({ error: err.message }, { status: 400 });
+			throw err;
+		}
+	}
+
 	if (input.type === "retry-question") {
 		try { questionRecoveryAppends(record.messages, input); }
 		catch (err) {
@@ -282,6 +295,11 @@ export async function handleChatInput(
 	let conversationEngine: PiEngine;
 	try { conversationEngine = piEngineForSpec(conversation, () => callPurpose.background, lifecycle, retentionForSlot("strong")); }
 	catch { return Response.json({ error: conversation.provider === "chatgpt" ? chatGPTStreamError("model catalog") : isSubscriptionProvider(conversation.provider) ? nativeSubscriptionError(conversation.provider, "model catalog") : "The selected model is unavailable." }, { status: 503 }); }
+	// Attachment image gate: the session's model may have changed since the
+	// pictures were uploaded. Refuse before compaction or any turn effects.
+	if (input.type === "text" && sendNeedsImageInput(record, input.attachmentIds) && !conversationEngine.model.input.includes("image")) {
+		return Response.json({ error: SEND_IMAGE_INPUT_ERROR }, { status: 400 });
+	}
 	const modelIdForCompaction = `${conversationEngine.model.provider}:${conversationEngine.model.id}`;
 	await ensureCompacted(
 		{
@@ -301,6 +319,12 @@ export async function handleChatInput(
 	const compactedRecord = stores.chatStore.getChat(chatId);
 	if (!compactedRecord) return Response.json({ error: "Unknown chat" }, { status: 404 });
 	record = compactedRecord;
+	// Re-check the image gate on the current record after the awaits: the
+	// attachment map is re-read here, and the check runs against the engine
+	// this turn will actually use (resolved once, above).
+	if (input.type === "text" && sendNeedsImageInput(record, input.attachmentIds) && !conversationEngine.model.input.includes("image")) {
+		return Response.json({ error: SEND_IMAGE_INPUT_ERROR }, { status: 400 });
+	}
 	// Recompute Retry eligibility on current truth, still before beginTurn.
 	// A compaction marker or another writer may have landed during awaits.
 	// These omissions affect ONLY the agent context, never the saved record.

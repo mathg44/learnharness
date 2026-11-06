@@ -53,7 +53,7 @@ The app runs as numeric UID/GID `1000:1000`, including startup. Root owns runtim
 
 Fresh named volumes inherit owner `1000:1000` and mode `0700` from the image. Startup uses umask `077`; the auth store writes mode `0600`. It never escalates or recursively chowns a host path. A wrongly owned replacement mount fails startup. Do not mount existing Pi/Obsidian records or import an old learner profile. Auth is plaintext private storage, not an encrypted vault. The app process and its file-reading tools can read what is mounted, including auth; container isolation does not solve that separate authority review.
 
-Browser file paths refer to the container's filesystem. This change adds no host-file mounts or upload sandbox. Claude Code authentication is not imported, and its external CLI is not installed. Subscription connections are shared server state. In particular, ChatGPT's extra loopback OAuth listener is not published by this recipe, so its callback is not validated here. Do not assume Docker makes that sign-in flow work.
+Typed server file paths refer to the container's filesystem. Browser session uploads instead accept explicitly selected file bytes and save processed contents in the chat record under `/data`; they do not mount the browser computer's filesystem or enable agent filesystem tools. See [session attachments](getting-started.md#attach-material-to-a-session). Claude Code authentication is not imported, and its external CLI is not installed. Subscription connections are shared server state. In particular, ChatGPT's extra loopback OAuth listener is not published by this recipe, so its callback is not validated here. Do not assume Docker makes that sign-in flow work.
 
 ## Health, failure and shutdown
 

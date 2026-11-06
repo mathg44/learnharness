@@ -61,6 +61,22 @@ test("native requests revalidate endpoint/model/key/limits with no fallback and 
 	assert.equal(requests.length, 2);
 	assert.ok(piModels().getProvider("openai"), "native route survives custom removal");
 });
+test("saved context and output limits prevent a long extraction prompt from being clamped to one output token", async () => {
+	const saved = readSettings()!;
+	writeSettings({ ...saved, customProvider: { ...saved.customProvider!, models: [{ id: "m" }] } });
+	const engine = piEngineForSpec({ provider: "custom", id: "m" });
+	const messages: Message[] = [{ role: "user", content: "Synthetic course notes. ".repeat(1200), timestamp: 0 }];
+	await run(engine, messages);
+	assert.equal(requests[0]!.body.max_completion_tokens, 1, "missing metadata reproduces the one-token import request");
+
+	const latest = readSettings()!;
+	writeSettings({ ...latest, customProvider: { ...latest.customProvider!, overrides: { m: { context: 1_000_000, maxTokens: 16_384 } } } });
+	await run(engine, messages);
+	assert.equal(requests[1]!.body.max_completion_tokens, 16_384, "the next request uses saved limits without a model or provider change");
+	assert.equal(requests[1]!.url, requests[0]!.url);
+	assert.equal(requests[1]!.auth, requests[0]!.auth);
+	assert.equal(requests[1]!.body.reasoning_effort, requests[0]!.body.reasoning_effort);
+});
 test("current key changes without configuration edits are reflected on the next operation", async () => {
 	const engine = piEngineForSpec({ provider: "custom", id: "m" });
 	await run(engine); persistCustomAuth(readCustomAuth().binding, "rotated-key"); await run(engine);

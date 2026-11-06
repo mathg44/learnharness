@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { PaperclipIcon } from "lucide-react";
 import { directoryReferencePath, quoteFilePath } from "@/src/core";
 import { Hint } from "@/components/ui/hint";
 import { INSERT_FILE_PATHS_EVENT } from "@/components/path-input";
 import { BROWSER_NOTICE } from "@/components/file-path-drop-zone";
+import { useDesktopFilePaths } from "@/components/session-attachments";
 
 /** Picked files → the rooted paths an editor chips (issue #285), via the
  *  desktop bridge. Same validity rule as drops: a file without a usable
@@ -39,25 +40,24 @@ export function attachmentPopupPlacement(button: { left: number; right: number }
 	};
 }
 
-const noSubscribe = () => () => {};
-/** The bridge is fixed for the window's life; the server render is always
- *  the browser case, so hydration never mismatches. */
-function useDesktopPaths(): boolean {
-	return useSyncExternalStore(noSubscribe, () => Boolean(window.lh?.getPathForFile), () => false);
-}
-
 /**
  * The attach button (issue #285): the picker's twin of a file drop — files
  * stay where they are and only their quoted paths enter the draft, at the
  * caret of `editorRef` (a PathInput root). Any file type; the agent reads
  * what it can. Desktop only: a browser File has no local path, so there the
- * button explains instead (the drop zone's notice). The separate native
- * folder choice returns the directory itself, including an empty directory.
- * aria-disabled, not disabled, so the tooltip still shows.
+ * button explains instead (the drop zone's notice), unless the composer
+ * stages browser files: then `onFiles` receives the picked Files directly.
+ * The separate native folder choice returns the directory itself, including
+ * an empty directory. aria-disabled, not disabled, so the tooltip still shows.
  */
-export function AttachFilesButton({ editorRef }: { editorRef: React.RefObject<HTMLDivElement | null> }) {
+export function AttachFilesButton({ editorRef, onFiles }: {
+	editorRef: React.RefObject<HTMLDivElement | null>;
+	/** Browser only: receives picked Files to stage. Desktop keeps paths. */
+	onFiles?: (files: File[]) => void;
+}) {
 	const pickerRef = useRef<HTMLInputElement>(null);
-	const desktop = useDesktopPaths();
+	const desktop = useDesktopFilePaths();
+	const browserFiles = !desktop && onFiles !== undefined;
 	const buttonRef = useRef<HTMLButtonElement>(null);
 	const popupRef = useRef<HTMLDivElement>(null);
 	const choosingFolder = useRef(false);
@@ -127,21 +127,33 @@ export function AttachFilesButton({ editorRef }: { editorRef: React.RefObject<HT
 				data-testid="attach-files-input"
 				onChange={(e) => {
 					const resolve = window.lh?.getPathForFile;
+					if (!resolve && onFiles) {
+						const files = Array.from(e.currentTarget.files ?? []);
+						if (files.length > 0) {
+							onFiles(files);
+							editorRef.current?.focus();
+						}
+						e.currentTarget.value = "";
+						return;
+					}
 					const { paths } = resolve ? pathsForFiles(Array.from(e.currentTarget.files ?? []), resolve) : { paths: [] };
 					if (paths.length > 0) editorRef.current?.dispatchEvent(new CustomEvent(INSERT_FILE_PATHS_EVENT, { detail: paths }));
 					e.currentTarget.value = ""; // allow re-picking the same file
 				}}
 			/>
-			<Hint label={desktop ? "Attach files or a folder" : BROWSER_NOTICE}>
+			<Hint label={desktop ? "Attach files or a folder" : browserFiles ? "Attach files" : BROWSER_NOTICE}>
 				<button
 					ref={buttonRef}
 					type="button"
 					aria-label="Attach files"
-					aria-disabled={!desktop}
-					aria-haspopup="menu"
-					aria-expanded={open}
+					aria-disabled={!desktop && !browserFiles}
+					aria-haspopup={browserFiles ? undefined : "menu"}
+					aria-expanded={browserFiles ? undefined : open}
 					data-testid="attach-files"
-					onClick={() => { if (desktop) { setNotice(""); setOpen(!open); } }}
+					onClick={() => {
+						if (desktop) { setNotice(""); setOpen(!open); }
+						else if (browserFiles) pickerRef.current?.click();
+					}}
 					className="flex size-10 shrink-0 items-center justify-center rounded-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground aria-disabled:cursor-default aria-disabled:opacity-40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground"
 				>
 					<PaperclipIcon className="size-4" />

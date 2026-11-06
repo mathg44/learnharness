@@ -128,7 +128,12 @@ export async function runSubmitAgent<T>(opts: {
 			shouldStop: (_message, toolResults) => toolResults.some((r) => r.toolName === opts.toolName && !r.isError),
 		},
 	);
-	void result;
-	if (!submitted) throw new Error(opts.neverSubmitted);
+	if (!submitted) {
+		const lastAssistant = result.newMessages.findLast((message) => message.role === "assistant");
+		if (lastAssistant?.role === "assistant" && lastAssistant.stopReason === "length") {
+			throw new Error(`The ${opts.role} hit its output token limit before submitting its result. Check the model's context and output limits in Settings, then retry.`);
+		}
+		throw new Error(opts.neverSubmitted);
+	}
 	return submitted;
 }

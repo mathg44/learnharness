@@ -2,6 +2,7 @@
  * using Pi's catalog and calculateCost; no copied pricing table lives here. */
 import type { CallUsage, ChatRecord, JobRecord, TurnUsage } from "./contracts.ts";
 import { NATIVE_SUBSCRIPTIONS } from "./contracts/subscriptions.ts";
+import { CLAUDE_CODE_PROVIDER } from "./contracts/claude-code.ts";
 
 export type CallPricer = (usage: Partial<CallUsage>, model: string) => number | null;
 export interface SessionPricing {
@@ -11,6 +12,10 @@ export interface SessionPricing {
 	subscriptionProviders?: string[];
 	/** Derived at read time, keyed by the persisted turn's id. Never stored. */
 	turnCosts: Record<string, number | null>;
+	/** Priced conversation and attachment-preparation entries, when attachments have usage. */
+	priced?: number;
+	/** Some turn or attachment preparation ran through Claude Code. Present only when true; never stored. */
+	cliBilled?: boolean;
 }
 
 export function isChatGPTPlan(model: string | undefined): boolean {
@@ -75,19 +80,29 @@ export function turnCost(turn: Pick<TurnUsage, "model" | "steps">, price: CallPr
 	return total;
 }
 
-export function sessionCost(record: Pick<ChatRecord, "turns">, price: CallPricer): SessionPricing {
+/** The session's spend: every conversation turn plus attachment preparation
+ *  (PDF transcription). Attachment entries count toward the totals only;
+ *  turnCosts stays keyed by turn. */
+export function sessionCost(record: Pick<ChatRecord, "turns" | "attachmentUsage">, price: CallPricer): SessionPricing {
 	let cost = 0;
 	let unpriced = 0;
 	let subscription = 0;
 	const turnCosts: Record<string, number | null> = {};
-	for (const turn of record.turns ?? []) {
-		const dollars = turnCost(turn, price);
-		turnCosts[turn.id] = dollars;
-		if (isSubscriptionModel(turn.model)) subscription++;
+	let priced = 0;
+	const models: string[] = [];
+	const fold = (entry: { model: string; steps: CallUsage[] }) => {
+		const dollars = turnCost(entry, price);
+		models.push(entry.model);
+		if (isSubscriptionModel(entry.model)) subscription++;
 		else if (dollars === null) unpriced++;
-		else cost += dollars;
-	}
-	return { cost, unpriced, ...(subscription ? { subscription, subscriptionProviders: subscriptionLabels((record.turns ?? []).map((turn) => turn.model)) } : {}), turnCosts };
+		else { cost += dollars; priced++; }
+		return dollars;
+	};
+	for (const turn of record.turns ?? []) turnCosts[turn.id] = fold(turn);
+	for (const entry of record.attachmentUsage ?? []) fold(entry);
+	const cliBilled = models.some((model) => model.startsWith(`${CLAUDE_CODE_PROVIDER}:`));
+	return { cost, unpriced, ...(subscription ? { subscription, subscriptionProviders: subscriptionLabels(models) } : {}), turnCosts,
+		...(record.attachmentUsage?.length ? { priced } : {}), ...(cliBilled ? { cliBilled } : {}) };
 }
 
 export function jobCost(job: Pick<JobRecord, "usage">, price: CallPricer): number | null {

@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowRightIcon, CornerDownLeftIcon, SquareIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PathInput } from "@/components/path-input";
 import { AttachFilesButton } from "@/components/attach-files-button";
+import { INSERT_SESSION_FILES_EVENT, SessionAttachmentTray, useDesktopFilePaths, type SessionAttachments } from "@/components/session-attachments";
 
 /**
  * The chat composer — content row ONLY (the persistent rounded shell lives in
@@ -27,7 +28,11 @@ export function enterAction(state: {
 	/** The between-problems pause is live: practice session, nothing
 	 *  active, no turn/compaction in flight (the caller's fold). */
 	nextProblem?: boolean;
+	/** Staged files are waiting (being prepared, or for the turn to end).
+	 *  Enter must not stop the turn or skip ahead underneath them. */
+	waiting?: boolean;
 }): "stop" | "send" | "next" | "none" {
+	if (state.waiting && !state.canSend) return "none";
 	// Composer steering (owner arc 2026-10-03): while a turn runs, typed
 	// text makes Enter a STEER (the queue-and-redirect send); Enter with
 	// an empty composer stays the stop shortcut. The button itself keeps
@@ -58,6 +63,7 @@ export function ChatSessionComposer({
 	placeholder,
 	nextProblem,
 	onNext,
+	attachments,
 }: {
 	busy: boolean;
 	value: string;
@@ -73,10 +79,15 @@ export function ChatSessionComposer({
 	placeholder?: string;
 	nextProblem?: boolean;
 	onNext?: () => void;
+	attachments?: SessionAttachments;
 }) {
 	const [draft, setDraft] = useState(value);
 	useLayoutEffect(() => { setDraft(value); }, [revision, value]);
-	const canSend = sendAllowed && (draft.trim().length > 0 || dictationActive);
+	// Staged files only send on an idle agent. Text steers mid-turn only
+	// when no files are staged (the send path refuses the combination).
+	const staged = (attachments?.items.length ?? 0) > 0;
+	const canSend = sendAllowed && !attachments?.busy && !(busy && staged)
+		&& (draft.trim().length > 0 || dictationActive || staged);
 	const applyDraft = useCallback((next: string) => {
 		setDraft(next);
 		onChange(next);
@@ -96,6 +107,7 @@ export function ChatSessionComposer({
 			placeholder={placeholder}
 			nextProblem={nextProblem}
 			onNext={onNext}
+			attachments={attachments}
 		/>
 	);
 }
@@ -106,13 +118,15 @@ export function Composer({
 	onChange,
 	onSend,
 	onStop,
-	canSend,
+	canSend: canSendProp,
 	autoFocus,
 	inputRef,
 	onEscape,
 	placeholder = "Ask, answer, or steer the lesson…",
 	nextProblem = false,
 	onNext,
+	attachments,
+	sendLabel = "Send",
 }: {
 	busy: boolean;
 	value: string;
@@ -138,22 +152,49 @@ export function Composer({
 	/** The signal's dispatcher (send({type:"next"})) — the chip and the
 	 *  empty-Enter share it. */
 	onNext?: () => void;
+	/** Browser file staging (paperclip, image paste, drops). The caller's
+	 *  onSend owns prepare() and clear(). Desktop path attachments are
+	 *  unaffected. */
+	attachments?: SessionAttachments;
+	/** The send button's accessible name. */
+	sendLabel?: string;
 }) {
-	const act = () => {
-		const action = enterAction({ busy, canSend, nextProblem });
+	const canSend = canSendProp && !attachments?.busy;
+	const waiting = Boolean(attachments && (attachments.busy || (busy && attachments.items.length > 0)));
+	const act = (source: "enter" | "button") => {
+		// The visible Stop button always stops; only Enter defers to staged files.
+		const action = source === "button" && busy && !canSend ? "stop" : enterAction({ busy, canSend, nextProblem, waiting });
 		if (action === "stop") onStop();
 		else if (action === "send") onSend();
 		else if (action === "next") onNext?.();
 	};
 	const ownInputRef = useRef<HTMLDivElement>(null);
 	const editorRef = inputRef ?? ownInputRef;
-	return (
+	const attachmentsRef = useRef(attachments);
+	useLayoutEffect(() => { attachmentsRef.current = attachments; });
+	// Desktop keeps path attachments only: no File staging from paste, drops or the picker.
+	const desktop = useDesktopFilePaths();
+	const staging = attachments !== undefined && !desktop;
+	useEffect(() => {
+		const root = editorRef.current;
+		if (!staging || !root) return;
+		const insert = (event: Event) => {
+			const files: unknown = (event as CustomEvent<unknown>).detail;
+			if (Array.isArray(files) && files.every((file) => file instanceof File)) {
+				attachmentsRef.current?.addFiles(files);
+				root.focus();
+			}
+		};
+		root.addEventListener(INSERT_SESSION_FILES_EVENT, insert);
+		return () => root.removeEventListener(INSERT_SESSION_FILES_EVENT, insert);
+	}, [staging, editorRef]);
+	const form = (
 		<form
 			data-testid="composer"
 			className="flex items-end gap-1.5 p-1.5"
 			onSubmit={(e) => {
 				e.preventDefault();
-				act();
+				act("button");
 			}}
 		>
 			<PathInput
@@ -177,14 +218,24 @@ export function Composer({
 					// across every input in the app (thinking field, answers).
 					if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
 						e.preventDefault();
-						act();
+						act("enter");
 					}
 				}}
+				{...(staging ? {
+					"data-session-attachment-input": "",
+					// Capture runs before PathInput's native plaintext paste handler.
+					onPasteCapture: (event: React.ClipboardEvent<HTMLDivElement>) => {
+						const images = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
+						if (images.length === 0) return;
+						event.preventDefault();
+						attachmentsRef.current?.addFiles(images);
+					},
+				} : {})}
 				placeholder={placeholder}
 				autoFocus={autoFocus}
 				className="field-sizing-content lh-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
 			/>
-			<AttachFilesButton editorRef={editorRef} />
+			<AttachFilesButton editorRef={editorRef} onFiles={staging ? (files) => attachmentsRef.current?.addFiles(files) : undefined} />
 			{/* The button follows the text (owner report 2026-10-03): while
 				 a turn runs WITH text typed it stays the SEND affordance
 				 (click = steer — steering must be clickable, not Enter-only);
@@ -199,7 +250,7 @@ export function Composer({
 				 (click and Enter share one lane), and typing anything
 				 returns the regular send. The green is the app's correct-
 				 answer register (answered-card's green-500/600). */}
-				{nextProblem && !busy && !canSend ? (
+				{nextProblem && !busy && !canSend && !waiting ? (
 					<button
 						type="submit"
 						data-testid="next-problem-button"
@@ -212,7 +263,7 @@ export function Composer({
 				) : (
 					<button
 						type="submit"
-						aria-label={busy && !canSend ? "Stop" : "Send"}
+						aria-label={busy && !canSend ? "Stop" : sendLabel}
 						disabled={!busy && !canSend}
 						className={cn(
 							"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors",
@@ -226,4 +277,5 @@ export function Composer({
 				)}
 		</form>
 	);
+	return attachments ? <><SessionAttachmentTray attachments={attachments} agentBusy={busy} />{form}</> : form;
 }

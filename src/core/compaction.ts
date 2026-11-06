@@ -311,7 +311,14 @@ export function serializeForSummary(messages: readonly LhMessage[]): string {
 	for (const m of messages) {
 		const role = (m as { role?: string }).role;
 		if (role === "user") {
-			lines.push(`[LEARNER] ${(m as { content: string }).content}`);
+			// Attachment messages carry block content: keep every text block in
+			// full (the attachment contents are the session's only copy of
+			// that source material once compacted); images become a mark.
+			const content = (m as { content: string | Array<{ type: string; text?: string }> }).content;
+			const text = typeof content === "string"
+				? content
+				: content.map((c) => (c.type === "text" ? c.text ?? "" : "(image)")).join("\n\n");
+			lines.push(`[LEARNER] ${text}`);
 		} else if (role === "assistant") {
 			const assistant = m as AssistantMessage;
 			const blocks: string[] = [];

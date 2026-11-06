@@ -42,7 +42,7 @@ export function callCost(call: Partial<CallUsage>, modelId: string): number | nu
 export function turnCost(turn: TurnUsage): number | null {
 	return foldTurnCost(turn, callCost);
 }
-export function sessionCost(record: Pick<ChatRecord, "turns">) {
+export function sessionCost(record: Pick<ChatRecord, "turns" | "attachmentUsage">) {
 	return foldSessionCost(record, callCost);
 }
 export function jobCost(job: Pick<JobRecord, "usage">): number | null {

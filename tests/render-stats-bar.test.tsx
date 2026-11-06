@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { StatsBar, formatContextMeasurement } from "../components/stats-bar.tsx";
 import { sessionCost } from "../src/server/pricing.ts";
+import { sessionCost as foldSessionCost } from "../src/core/prices.ts";
 import { catalogLimits } from "../components/model-picker.tsx";
 import type { ModelCatalogEntry, ModelCatalogResponse } from "../src/core/contracts.ts";
 import { prettyModel } from "../components/usage-format.ts";
@@ -65,6 +66,22 @@ describe("stats bar", () => {
 		// the strong slot arrives client-side via GET /api/settings; the
 		// turn log below still folds the ACTUAL models billed
 		assert.match(html, /data-testid="stats-model"[^>]*>\s*<span[^>]*>—<\/span>/);
+	});
+
+	it("shows priced PDF preparation even when no conversation turn is priced", () => {
+		const turns = [turn({ model: "unknown:model" })];
+		const pricing = foldSessionCost({ turns, attachmentUsage: [{ id: "prep", attachmentId: "pdf", at: "", model: "fixture:reader", steps: [step(100, 20)] }] }, (_usage, model) => model === "fixture:reader" ? 0.25 : null);
+		const html = renderToStaticMarkup(<StatsBar chatId="fixture" turns={turns} pricing={pricing} contextTokens={null} />);
+		assert.equal(pricing.priced, 1);
+		assert.match(html, /data-testid="stats-cost">\$0\.2500</);
+		assert.match(html, /data-testid="stats-context">\?</);
+	});
+
+	it("does not hide a priced turn when preparation is unpriced", () => {
+		const turns = [turn()];
+		const pricing = foldSessionCost({ turns, attachmentUsage: [{ id: "prep", attachmentId: "pdf", at: "", model: "unknown:reader", steps: [step(100, 20)] }] }, (_usage, model) => model === "unknown:reader" ? null : 0.5);
+		const html = renderToStaticMarkup(<StatsBar chatId="fixture" turns={turns} pricing={pricing} contextTokens={11_000} />);
+		assert.match(html, /data-testid="stats-cost">\$0\.5000</);
 	});
 
 	it("shows — for cost when every turn is unpriceable, never a fake $0", () => {

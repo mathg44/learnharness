@@ -85,6 +85,14 @@ A marker in the **saved conversation** acknowledges delivery—not HTTP acceptan
 
 This is single-process coordination over JSON files, not a transactional queue or exactly-once provider execution. In-memory composer steers do not have the same durability as job delivery.
 
+### Browser session attachments
+
+The browser stages local files until Send. `POST /api/chats/:id/attachments` accepts bounded multipart uploads with stable client-generated attachment IDs, so retrying a successfully prepared file does not repeat its conversion. Text is decoded locally, raster images use the bounded learner-image normalization worker, and PDFs reuse page-by-page transcription through the session's conversation model and connection. This does not invoke graph extraction, use the PDF-reader role's model selection, or restore filesystem tools in the private trial.
+
+Prepared content belongs to the chat record. A text input references attachment IDs; the server resolves them into native text/image blocks and saves them with the learner's input before inference. App-only attachment metadata lets the view show filenames and image previews without displaying entire transcriptions in the learner's text. The model receives the contents, and compaction can read the attachment text. Image previews use session-scoped, guarded routes rather than public files. Original PDFs are not retained. Deleting a chat removes its processed attachments too.
+
+The upload and send gates enforce the 25 MiB aggregate limit and reject unknown or duplicate attachment references. PDFs retain the transcriber's 1,000-page cap. Conversion errors retain completed preparations for explicit retry; failed model calls retain reported usage in a session attachment-usage log, separate from conversation-turn context estimates and graph costs. Browser drafts are memory-only until preparation; new-session navigation hands over prepared IDs and metadata, never file bytes in URLs or browser storage.
+
 ### Learner-image snapshots
 
 `show_image` displays a local raster picture; `visual` with an image path annotates it. Both use the file-access policy and shared processing: input bounds of 25 MiB, 16 megapixels, and 8192px per side; off-thread orientation/metadata cleanup; stored PNG/JPEG bounded to 1600px per side and below 1 MiB of base64.
@@ -112,7 +120,11 @@ The [extractor](../src/agent/subagents/extraction.ts) reads source text and prop
 
 ### Notes and source organization
 
-`POST /api/graph/import` feeds text or locally converted PDF Markdown into the same pipeline, without chat-message anchors. The [import UI](../components/notes-import.tsx) queues one request per supported file, up to three in flight. Files are capped at 25 MiB; server aggregate file bytes per request are also capped at 25 MiB, with a 26 MiB multipart/proxy bound. PDF conversion has no OCR; skipped image-only pages and scanner caveats are reported.
+`POST /api/graph/import` feeds text or PDF transcriptions into the same pipeline, without chat-message anchors. The [import UI](../components/notes-import.tsx) queues one request per supported file, up to three in flight. Files are capped at 25 MiB; server aggregate file bytes per request are also capped at 25 MiB, with a 26 MiB multipart/proxy bound.
+
+For uploaded PDFs, [`pdf-transcription.ts`](../src/agent/subagents/pdf-transcription.ts) renders every page locally and sends each image to the configured `pdfReader` engine, normally the Vision slot. It requests faithful Markdown with handwriting, equations, tables, and diagram labels, not a summary. Page order is preserved, uncertain readings use `[unclear]`, and recognized blanks use `[blank page]`. The existing question-answering PDF agent is unchanged. Upload transcription does not expose filesystem tools and remains available in the server-trial profile.
+
+The 1,000-page cap is checked before rendering or inference. Each file processes one page at a time under the shared background-LLM semaphore. Configuration and provider-key admission cover transcription, extraction, and audit before the first model call. The source exclusion lock covers transcription through extraction; transcription has an abortable activity row with page progress. A failed, empty, or truncated page response refuses that file before any graph extraction. Billed transcription usage is retained on the source even if the file fails or is aborted, and graph costs include its separate transcription stage. Images are sent to the configured provider and recognition can still miss details; successful PDF imports carry a notice.
 
 Source identity hashes the original path/name; safe folder-relative paths can be supplied alongside matching filenames. Renaming or reorganizing a displayed source does not change its identity. Every explicit import processes the whole file, even unchanged text; retry is not exactly-once processing. Same-source overlap is refused as busy. Per-file outcomes distinguish completed, partial, failed, aborted, and busy; zero findings can still be a completed import.
 
@@ -134,7 +146,7 @@ Extraction is the construction writer, not the only mutation: source/session/nod
 
 | Data | Files |
 | --- | --- |
-| Conversations, plans, usage, image snapshots | `chats/*.json` |
+| Conversations, plans, usage, image snapshots, processed browser attachments | `chats/*.json` |
 | Worker computation and delivery obligations | `jobs/*.json` |
 | Propositions, chains, checkpoints, coverage | `graph/{nodes,chains,sessions,coverage}.jsonl` |
 | Sources, organization, positions, render preferences | JSON maps under `graph/` |
@@ -157,7 +169,7 @@ API environment values override saved keys. Packaged subscription refresh creden
 
 ### File access and external services
 
-Read-only file tools default to the server user's home, not a selected project or app data root. Walk exclusions reduce noise; they are not access authority. Session attachments carry local paths rather than uploads.
+Read-only file tools default to the server user's home, not a selected project or app data root. Walk exclusions reduce noise; they are not access authority. Desktop session attachments carry local paths. Browser session attachments upload explicit file bytes and deliver processed content directly, without granting filesystem access.
 
 The **sensitive-path guard** refuses known private home locations, `.env` files, configured auth/subscription files, and recognized credential temporary files. It checks named/canonical paths and aliases; walks skip protected locations. It is path-based defense in depth, not a content scanner, sandbox, or allowed-folders setting. Other sensitive files and learning records can remain readable. See [`fs-shared.ts`](../src/agent/tools/fs-shared.ts).
 

@@ -182,6 +182,17 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 		}
 
 		if (role === "user") {
+			// Browser attachments: the bubble shows the learner's own text and
+			// one chip per attachment. Attachment contents (file text, PDF
+			// transcriptions, image blocks) are model-facing only.
+			if (m.sessionAttachments) {
+				const parts: LhViewPart[] = m.userText?.trim() ? [textPart(m.userText)] : [];
+				m.sessionAttachments.forEach((info, i) => {
+					parts.push({ type: "data-session-attachment", id: `${m.id}-a${i}`, data: info });
+				});
+				out.push({ id: m.id, role: "user", parts });
+				continue;
+			}
 			const content = m.content as string | Array<{ type: string; text?: string }>;
 			const texts =
 				typeof content === "string"

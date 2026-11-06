@@ -96,6 +96,15 @@ describe("startDraftSession — the create-on-send contract", () => {
 });
 
 describe("DraftShell — the sessionless surface", () => {
+	it("locks the composer while creating and preparing the session, then unlocks on failure", () => {
+		const props = { text: "my lesson", onChange: () => {}, onSend: () => {} };
+		const busy = renderToStaticMarkup(<DraftShell {...props} busy />);
+		assert.match(busy, /data-attachment-composer="" inert=""/);
+		assert.match(busy, /Preparing session/);
+		const failed = renderToStaticMarkup(<DraftShell {...props} busy={false} startError />);
+		assert.ok(!failed.includes('inert=""'));
+		assert.match(failed, /my lesson/);
+	});
 	it("storage failure leaves the full draft editable beside the approved error", () => {
 		const html = renderToStaticMarkup(<DraftShell busy={false} text="keep all my text" onChange={() => {}} onSend={() => {}} startError />);
 		assert.ok(html.includes('role="alert"'));

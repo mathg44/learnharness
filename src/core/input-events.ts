@@ -44,10 +44,19 @@ import {
 	pendingProblemDismissalOf,
 } from "./native-messages.ts";
 import { QUESTION_TOOLS, toolQuestionKind } from "./pending.ts";
+import {
+	isValidAttachmentId,
+	MAX_SESSION_ATTACHMENT_BYTES,
+	MAX_SESSION_ATTACHMENTS,
+	ownSessionAttachment,
+	type PreparedSessionAttachment,
+} from "./session-attachments.ts";
 
 /** One client-originated input event (the POST body's `input`). */
 export type ChatInput =
-	| { type: "text"; text: string }
+	/** `attachmentIds` reference prepared browser attachments
+	 *  (ChatRecord.attachments); text may be empty when ids are present. */
+	| { type: "text"; text: string; attachmentIds?: string[] }
 	| { type: "answer"; toolCallId: string; answer: QuestionAnswerData }
 	| { type: "continue" }
 	/** The failed-turn retry (issue #110): the banner's Retry button. */
@@ -132,6 +141,9 @@ export function parseUserSteerInput(input: unknown): UserSteerInput {
 	if (typeof i.text !== "string" || i.text.trim().length === 0) {
 		throw new ChatInputError("steer input requires non-empty text");
 	}
+	// Attachments never ride the steering rail: a send with attachments
+	// waits for the running turn to end (the composer stages them).
+	if (i.attachmentIds !== undefined) throw new ChatInputError("steer input cannot carry attachments");
 	return { type: "steer", id: i.id, text: i.text };
 }
 
@@ -164,11 +176,14 @@ export function parseChatInput(input: unknown): ChatInput {
 	if (typeof input !== "object" || input === null) throw new ChatInputError("input must be an object");
 	const i = input as Record<string, unknown>;
 	switch (i.type) {
-		case "text":
-			if (typeof i.text !== "string" || (i.text as string).trim().length === 0) {
-				throw new ChatInputError("text input requires non-empty text");
+		case "text": {
+			if (typeof i.text !== "string") throw new ChatInputError("text input requires text");
+			const ids = parseAttachmentIds(i.attachmentIds);
+			if (i.text.trim().length === 0 && ids.length === 0) {
+				throw new ChatInputError("text input requires non-empty text or attachments");
 			}
-			return { type: "text", text: i.text };
+			return ids.length > 0 ? { type: "text", text: i.text, attachmentIds: ids } : { type: "text", text: i.text };
+		}
 		case "answer":
 			if (typeof i.toolCallId !== "string" || i.toolCallId.length === 0) {
 				throw new ChatInputError("answer input requires toolCallId");
@@ -212,12 +227,14 @@ export function parseChatInput(input: unknown): ChatInput {
  * double-answering.
  */
 export function inputAppends(
-	record: { messages: LhMessage[]; kind?: string },
+	record: { messages: LhMessage[]; kind?: string; attachments?: Record<string, PreparedSessionAttachment> },
 	input: ChatInput,
 ): LhMessage[] {
 	switch (input.type) {
-		case "text":
-			return [...dismissalConclusion(record), newUserMessage(input.text)];
+		case "text": {
+			const attachments = sentAttachments(record, input.attachmentIds);
+			return [...dismissalConclusion(record), newUserMessage(input.text, attachments)];
+		}
 		case "answer": {
 			const pending = danglingQuestionOf(record.messages);
 			if (!pending || pending.toolCallId !== input.toolCallId) {
@@ -254,6 +271,36 @@ export function inputAppends(
 			return [...dismissalConclusion(record), newNextMessage()];
 		}
 	}
+}
+
+/** Optional attachment ids: a list of unique, well-formed ids. */
+function parseAttachmentIds(value: unknown): string[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value)) throw new ChatInputError("attachmentIds must be an array");
+	if (value.length > MAX_SESSION_ATTACHMENTS) {
+		throw new ChatInputError(`A message can carry at most ${MAX_SESSION_ATTACHMENTS} attachments`);
+	}
+	if (!value.every(isValidAttachmentId)) throw new ChatInputError("attachmentIds contains an invalid id");
+	if (new Set(value).size !== value.length) throw new ChatInputError("attachmentIds contains a duplicate id");
+	return value;
+}
+
+/** The prepared attachments a text input references, in the sent order.
+ *  Unknown ids and an oversized total are honest 400s. */
+export function sentAttachments(
+	record: { attachments?: Record<string, PreparedSessionAttachment> },
+	ids: readonly string[] | undefined,
+): PreparedSessionAttachment[] {
+	if (!ids || ids.length === 0) return [];
+	const attachments = ids.map((id) => {
+		const attachment = ownSessionAttachment(record, id);
+		if (!attachment) throw new ChatInputError("An attachment is no longer available. Attach the file again.");
+		return attachment;
+	});
+	if (attachments.reduce((total, a) => total + a.size, 0) > MAX_SESSION_ATTACHMENT_BYTES) {
+		throw new ChatInputError("Attachments are too big. Max 25 MB per message.");
+	}
+	return attachments;
 }
 
 /** Validate before any turn effects, then again against current saved truth.

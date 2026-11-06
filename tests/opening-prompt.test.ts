@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { clearOpeningPrompt, readOpeningPrompt, readOpeningPromptEntry, stashOpeningPrompt } from "../components/opening-prompt.ts";
 import { SessionStarter } from "../components/start-session.ts";
+import type { SessionAttachmentInfo } from "../src/core";
 
 const original = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
 let data: Map<string, string>;
@@ -33,6 +34,20 @@ describe("opening message storage", () => {
 		assert.deepEqual(readOpeningPromptEntry("c1"), { text, attempted: true });
 		assert.equal(clearOpeningPrompt("c1"), true);
 		assert.equal(readOpeningPrompt("c1"), undefined);
+	});
+
+	it("hands over attachment-only openings without storing file contents", () => {
+		const info: SessionAttachmentInfo = { id: "image_1", name: "screenshot.png", kind: "image", mimeType: "image/png", size: 42 };
+		assert.equal(stashOpeningPrompt("c1", "", false, [info]), true);
+		assert.deepEqual(readOpeningPromptEntry("c1"), { text: "", attempted: false, attachments: [info] });
+		assert.equal(stashOpeningPrompt("c1", "", true, [info]), true);
+		assert.equal(readOpeningPromptEntry("c1")?.attempted, true);
+		assert.ok(!data.get("lh.openingPrompt.c1")!.includes("base64"));
+	});
+
+	it("does not restore malformed attachment references from storage", () => {
+		data.set("lh.openingPrompt.c1", JSON.stringify({ text: "hello", attempted: true, attachments: [{ id: "../other", name: "bad", kind: "image", mimeType: "image/png", size: 1 }] }));
+		assert.deepEqual(readOpeningPromptEntry("c1"), { text: "hello", attempted: true });
 	});
 
 	it("treats a legacy raw-text stash conservatively as a possibly attempted send", () => {
@@ -101,6 +116,38 @@ describe("new-session create and handover", () => {
 		assert.equal(await starter.start({ title: "hello" }, fetchLike), "/chat/chat_1");
 		assert.equal(bodies.length, 1);
 	});
+	it("creates first, prepares attachments for that session, then hands over references", async () => {
+		const starter = new SessionStarter();
+		const { bodies, fetchLike } = createFetch();
+		const info: SessionAttachmentInfo = { id: "pdf_1", name: "lesson.pdf", kind: "pdf", mimeType: "application/pdf", size: 123 };
+		const preparedFor: string[] = [];
+		const attachments = {
+			snapshot: () => [{ id: info.id, name: info.name, info }],
+			prepare: async (chatId: string) => { preparedFor.push(chatId); return [info]; },
+		};
+		assert.equal(await starter.start({ title: "lesson.pdf" }, fetchLike, "model", attachments, ""), "/chat/chat_1");
+		assert.deepEqual(bodies, [{ title: "lesson.pdf" }]);
+		assert.deepEqual(preparedFor, ["chat_1"]);
+		assert.deepEqual(readOpeningPromptEntry("chat_1"), { text: "", attempted: false, attachments: [info] });
+	});
+
+	it("reuses the created session after attachment preparation fails", async () => {
+		const starter = new SessionStarter();
+		const { bodies, fetchLike } = createFetch();
+		let failPreparation = true;
+		const info: SessionAttachmentInfo = { id: "notes_1", name: "notes.txt", kind: "text", mimeType: "text/plain", size: 10 };
+		const attachments = {
+			snapshot: () => [{ id: info.id, name: info.name, info }],
+			prepare: async () => { if (failPreparation) throw new Error("upload failed"); return [info]; },
+		};
+		await assert.rejects(starter.start({ title: "my topic" }, fetchLike, "model", attachments), /upload failed/);
+		assert.equal(data.size, 0, "no navigation handover before all files are ready");
+		failPreparation = false;
+		assert.equal(await starter.start({ title: "my topic" }, fetchLike, "model", attachments), "/chat/chat_1");
+		assert.equal(bodies.length, 1);
+		assert.deepEqual(readOpeningPromptEntry("chat_1")?.attachments, [info]);
+	});
+
 	it("changed text, mode, picks or birth settings create a matching new session", async () => {
 		const starter = new SessionStarter();
 		const { bodies, fetchLike } = createFetch();
