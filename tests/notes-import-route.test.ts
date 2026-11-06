@@ -22,10 +22,18 @@ function request(names: string[]) {
 it("route keeps three-worker batching, request positions and mixed per-file outcomes/config details", async () => {
 	let active = 0;
 	let peak = 0;
+	let releaseInitial!: () => void;
+	let releaseSlow!: () => void;
+	const initial = new Promise<void>((resolve) => { releaseInitial = resolve; });
+	const slow = new Promise<void>((resolve) => { releaseSlow = resolve; });
 	extraction.importNotes = async ({ filePath }) => {
 		active++; peak = Math.max(peak, active);
+		if (active === 3) releaseInitial();
 		try {
-			await new Promise((resolve) => setTimeout(resolve, filePath === "slow.md" ? 25 : 1));
+			await initial;
+			if (filePath === "slow.md") await slow;
+			// This worker can start the fourth file only after pushing an earlier result.
+			if (filePath === "failed") releaseSlow();
 			if (filePath === "models.md") throw new ModelsNotConfiguredError(["cheap"]);
 			if (filePath === "key.md") throw new ProviderKeyMissingError("openai", ["cheap"]);
 			if (["failed", "partial", "aborted", "busy"].includes(filePath)) throw new NotesImportError(filePath as NotesImportError["outcome"], { nodes: 2, chains: 1 }, `synthetic ${filePath}`);
@@ -111,46 +119,53 @@ function upload(files: { name: string; bytes: Uint8Array<ArrayBuffer> | string }
 	return new Request("http://localhost/api/graph/import", { method: "POST", body: form });
 }
 
-it("a PDF reaches the pipeline as page-marked Markdown and reports skipped image-only pages", async () => {
-	const received: string[] = [];
-	extraction.importNotes = async ({ text }) => { received.push(text); return { nodes: 1, chains: 0 }; };
+const PDF_NOTICE = "Every PDF page was sent to the PDF-reader model for transcription. Check for recognition errors.";
+
+it("a PDF reaches the pipeline as uploaded bytes for full-page transcription", async () => {
+	const received: Parameters<typeof extraction.importNotes>[0][] = [];
+	extraction.importNotes = async (input) => { received.push(input); return { nodes: 1, chains: 0 }; };
 	const pdf = tinyPdf([{ image: true }, { runs: [{ text: "Week 3", x: 72, y: 700, size: 20 }, { text: "Plants make sugar.", x: 72, y: 660 }] }]);
 	const response = await POST(upload([{ name: "lecture.pdf", bytes: pdf }, { name: "notes.md", bytes: "# plain notes" }]));
 	const { results } = await response.json();
-	assert.deepEqual(received.sort(), ["# plain notes", "--- Page 2 ---\n\n# Week 3\n\nPlants make sugar."]);
+	assert.deepEqual(received.find((r) => r.filePath === "lecture.pdf"), { filePath: "lecture.pdf", text: "", pdf });
+	assert.deepEqual(received.find((r) => r.filePath === "notes.md"), { filePath: "notes.md", text: "# plain notes" });
 	const byName = (name: string) => results.find((r: { filePath: string }) => r.filePath === name);
 	assert.equal(byName("lecture.pdf").outcome, "completed");
-	assert.equal(byName("lecture.pdf").notice, "Scanned pages may have errors. Skipped 1 image-only page; OCR is not supported.");
+	assert.equal(byName("lecture.pdf").notice, PDF_NOTICE);
 	assert.equal(byName("notes.md").notice, undefined, "text files carry no notice");
 });
 
 it("PDFs are known by their bytes, not their names", async () => {
-	const received: string[] = [];
-	extraction.importNotes = async ({ text }) => { received.push(text); return { nodes: 0, chains: 0 }; };
+	const received: Parameters<typeof extraction.importNotes>[0][] = [];
+	extraction.importNotes = async (input) => { received.push(input); return { nodes: 0, chains: 0 }; };
 	const pdf = tinyPdf([{ runs: [{ text: "Inside a misnamed file", x: 72, y: 700 }] }]);
 	await POST(upload([{ name: "renamed.txt", bytes: pdf }, { name: "fake.pdf", bytes: "just text" }]));
-	assert.deepEqual(received.sort(), ["--- Page 1 ---\n\nInside a misnamed file", "just text"]);
+	assert.deepEqual(received.find((r) => r.filePath === "renamed.txt"), { filePath: "renamed.txt", text: "", pdf });
+	assert.deepEqual(received.find((r) => r.filePath === "fake.pdf"), { filePath: "fake.pdf", text: "just text" });
 });
 
-it("PDFs with nothing to import are refused before any model call", async () => {
-	let calls = 0;
-	extraction.importNotes = async () => { calls++; return { nodes: 0, chains: 0 }; };
-	const response = await POST(upload([
-		{ name: "scan.pdf", bytes: tinyPdf([{ image: true }, {}]) },
-		{ name: "broken.pdf", bytes: "%PDF-1.4\nnot really a pdf" },
-		{ name: "huge.pdf", bytes: tinyPdf(Array.from({ length: 1001 }, () => ({}))) },
-	]));
+it("PDF transcription failures refuse only that file and preserve configuration details", async () => {
+	extraction.importNotes = async ({ filePath }) => {
+		if (filePath === "key.pdf") throw new ProviderKeyMissingError("openai", ["vision"]);
+		if (filePath === "models.pdf") throw new ModelsNotConfiguredError(["vision"]);
+		if (filePath === "truncated.pdf") throw new NotesImportError("failed", { nodes: 0, chains: 0 }, "Page 2: transcription was truncated.");
+		return { nodes: 1, chains: 0 };
+	};
+	const pdf = tinyPdf([{ image: true }]);
+	const response = await POST(upload(["key.pdf", "models.pdf", "truncated.pdf", "good.pdf"].map((name) => ({ name, bytes: pdf }))));
 	const { results } = await response.json();
-	assert.equal(calls, 0);
-	const errorOf = (name: string) => results.find((r: { filePath: string }) => r.filePath === name);
-	for (const [name, error] of [["scan.pdf", "OCR not supported yet."], ["broken.pdf", "Could not open this PDF."], ["huge.pdf", "Too long. Max 1,000 pages."]] as const) {
-		assert.equal(errorOf(name).ok, false);
-		assert.equal(errorOf(name).outcome, "failed");
-		assert.equal(errorOf(name).error, error);
-	}
+	const byName = (name: string) => results.find((r: { filePath: string }) => r.filePath === name);
+	assert.equal(byName("key.pdf").code, "provider_key_missing");
+	assert.deepEqual(byName("key.pdf").slots, ["vision"]);
+	assert.equal(byName("models.pdf").code, "models_not_configured");
+	assert.deepEqual(byName("models.pdf").missing, ["vision"]);
+	assert.equal(byName("truncated.pdf").outcome, "failed");
+	assert.equal(byName("truncated.pdf").error, "Page 2: transcription was truncated.");
+	assert.equal(byName("good.pdf").outcome, "completed");
+	assert.equal(byName("good.pdf").notice, PDF_NOTICE);
 });
 
-it("PDF notices count only image-only pages, not blanks, and preserve the scanner caveat for text-only PDFs", async () => {
+it("scanned, blank and text-only PDFs all use transcription and disclose recognition errors", async () => {
 	extraction.importNotes = async () => ({ nodes: 0, chains: 0 });
 	const text = { runs: [{ text: "Text page", x: 72, y: 600 }] };
 	const response = await POST(upload([
@@ -158,20 +173,19 @@ it("PDF notices count only image-only pages, not blanks, and preserve the scanne
 		{ name: "text.pdf", bytes: tinyPdf([text]) },
 	]));
 	const { results } = await response.json();
-	assert.equal(results.find((r: { filePath: string }) => r.filePath === "mixed.pdf").notice,
-		"Scanned pages may have errors. Skipped 2 image-only pages; OCR is not supported.");
-	assert.equal(results.find((r: { filePath: string }) => r.filePath === "text.pdf").notice, "Scanned pages may have errors.");
+	assert.equal(results.find((r: { filePath: string }) => r.filePath === "mixed.pdf").notice, PDF_NOTICE);
+	assert.equal(results.find((r: { filePath: string }) => r.filePath === "text.pdf").notice, PDF_NOTICE);
 	assert.ok(results.every((r: { ok: boolean }) => r.ok));
 });
 
-for (const image of ["mask", "inline"] as const) it(`mixed PDF notices include textless ${image} image pages`, async () => {
+for (const image of ["mask", "inline"] as const) it(`textless ${image} image PDFs enter the same transcription flow`, async () => {
 	extraction.importNotes = async () => ({ nodes: 0, chains: 0 });
 	const response = await POST(upload([{ name: "mixed.pdf", bytes: tinyPdf([
 		{ runs: [{ text: "Readable text", x: 72, y: 600 }] }, { image },
 	]) }]));
 	const { results } = await response.json();
 	assert.equal(results[0].outcome, "completed");
-	assert.equal(results[0].notice, "Scanned pages may have errors. Skipped 1 image-only page; OCR is not supported.");
+	assert.equal(results[0].notice, PDF_NOTICE);
 });
 
 for (const split of [false, true]) it(`server refuses actual file bytes over 25 MiB (${split ? "aggregate" : "single file"}) before the pipeline`, async () => {

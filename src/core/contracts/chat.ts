@@ -10,6 +10,7 @@ import type { LhMessage } from "../native-messages.ts";
 import type { Phase3 } from "../phases.ts";
 import type { PlanNodeStatus, PlanTree } from "./plan.ts";
 import type { EmissionStats } from "./graph.ts";
+import type { PreparedSessionAttachment } from "../session-attachments.ts";
 
 // ─── Chat records (the session store's on-disk format) ───────────────────────
 
@@ -35,6 +36,14 @@ export interface ChatRecord {
 	messages: LhMessage[];
 	/** Session-local processed pictures; artifact records carry references only. */
 	imageSnapshots?: Record<string, ImageSnapshot>;
+	/** Browser attachments prepared for sending, keyed by their client id.
+	 *  Processed contents only (text, PDF transcription, normalized image);
+	 *  entries stay after a send so a failed turn can be retried. */
+	attachments?: Record<string, PreparedSessionAttachment>;
+	/** Append-only model usage of attachment preparation (PDF transcription),
+	 *  success or failure. Folded into the session cost; kept apart from
+	 *  `turns` so conversation context/cache estimates stay accurate. */
+	attachmentUsage?: AttachmentUsage[];
 	/** The session's kind — absent = teach (pre-practice records). */
 	kind?: ChatKind;
 	/** The session's plan tree (vision §2) — written by plan tools via saveTree. */
@@ -109,12 +118,28 @@ export interface ExtractionRunUsage {
 	/** Model usage per stage, in pipeline order (merger is deterministic —
 	 *  no model call, no entry). */
 	stages: {
+		/** PDF transcription, present only on runs that transcribed a PDF.
+		 *  A standalone transcription run stores placeholder extractor and
+		 *  auditor entries ({ model: "unknown", steps: [] }); readers skip
+		 *  a step-less stage whenever this field is present. */
+		transcription?: ExtractionStageUsage;
 		extractor: ExtractionStageUsage;
 		auditor: ExtractionStageUsage;
 	};
 }
 
 // ─── Usage accounting (the money channel) ─────────────────────────────────────
+
+/** One attachment preparation's model usage (one PDF transcription attempt). */
+export interface AttachmentUsage {
+	/** Unique per attempt: the idempotency key for the append-only log. */
+	id: string;
+	attachmentId: string;
+	at: string;
+	/** Provider-qualified ("provider:id"), like TurnUsage.model. */
+	model: string;
+	steps: CallUsage[];
+}
 
 /** One model call's token accounting — the SDK's LanguageModelUsage
  * flattened to the fields we persist (undefined = provider didn't report;

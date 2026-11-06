@@ -32,6 +32,35 @@ describe("new-session opening delivery acceptance", () => {
 		assert.equal(calls.filter(url => url === "/api/chat").length, 1);
 	});
 
+	it("sends prepared attachment references and adopts the canonical attachment-only message", async () => {
+		const canonical = {
+			...newUserMessage(""),
+			content: [{ type: "text" as const, text: "[Attached file: lesson.txt]\n\nLesson content" }],
+			userText: "",
+			sessionAttachments: [{ id: "file_1", name: "lesson.txt", kind: "text" as const, mimeType: "text/plain", size: 14 }],
+		};
+		let accepted = 0;
+		const model: SessionModel = new SessionModel({ chatId: "c1", initialMessages: [], fetch: async (url, init): Promise<Response> => {
+			if (String(url) === "/api/chat") {
+				assert.equal(model.getState().nativeMessages.length, 0, "no fabricated empty optimistic card");
+				assert.deepEqual(JSON.parse(String(init?.body)), { chatId: "c1", input: { type: "text", text: "", attachmentIds: ["file_1"] } });
+				return Response.json({ ok: true });
+			}
+			if (String(url).endsWith("/stream")) return new Response("data: [DONE]\n\n");
+			return Response.json({ messages: [canonical] });
+		} });
+		assert.equal(await model.send({ type: "text", text: "", attachmentIds: ["file_1"] }, () => { accepted++; }), true);
+		assert.equal(accepted, 1);
+		assert.deepEqual(model.getState().nativeMessages, [canonical]);
+	});
+
+	it("keeps attachment inputs unconfirmed after refused admission", async () => {
+		const model = new SessionModel({ chatId: "c1", initialMessages: [], fetch: async () => new Response("busy", { status: 409 }), waitMaxMs: 0 });
+		assert.equal(await model.send({ type: "text", text: "read this", attachmentIds: ["file_1"] }, () => assert.fail("not accepted")), false);
+		assert.equal(model.getState().hasConfirmedConversation, false);
+		assert.equal(model.getState().nativeMessages.length, 0);
+	});
+
 	it("a teardown racing the POST still cleans up on acknowledgment without attaching", async () => {
 		const post = deferred<Response>();
 		let notified = 0;

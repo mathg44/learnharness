@@ -108,9 +108,9 @@ export function StatsBar({
 	const { cost = 0, unpriced = turns.length, subscription = 0 } = pricing ?? {};
 	// Honest cost: show dollars only when at least one turn priced;
 	// otherwise "—" (never a fake $0.0000).
-	const pricedCount = turns.length - unpriced - subscription;
+	const pricedCount = pricing?.priced ?? turns.length - unpriced - subscription;
 	const providers = pricing?.subscriptionProviders ?? subscriptionLabels(turns.map((turn) => turn.model));
-	const cliBilled = turns.some((turn) => turn.model.startsWith(`${CLAUDE_CODE_PROVIDER}:`));
+	const cliBilled = pricing?.cliBilled ?? turns.some((turn) => turn.model.startsWith(`${CLAUDE_CODE_PROVIDER}:`));
 	const costLabel = planCostLabel(pricedCount > 0 ? cost : null, cliBilled ? [...providers, "CLI"] : providers);
 
 	return (
@@ -181,7 +181,7 @@ export function StatsBar({
 							{providers.includes("ChatGPT") && <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer" className="underline underline-offset-2">Manage ChatGPT usage</a>}
 							{unpriced > 0 && (
 								<div className="flex justify-between gap-2">
-									<span>Unpriced turns</span>
+									<span>{pricing?.priced === undefined ? "Unpriced turns" : "Unpriced operations"}</span>
 									<span className="tabular-nums text-card-foreground">{unpriced}</span>
 								</div>
 							)}

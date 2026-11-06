@@ -100,6 +100,8 @@ Additional runtime gates have prerequisites:
 | --- | --- |
 | `node scripts/smoke-provider-runtime.mjs` | Fresh build; traced provider payload/runtime paths with fixtures. Also used during packaging. |
 | `node scripts/smoke-web-subscriptions.mjs` | Build, no dev server running; isolated synthetic connection checks, external traffic blocked. Briefly changes/restores a source mtime to exercise reload. |
+| `LH_TEST_CHROME=/path/to/chromium node scripts/smoke-session-attachments.mjs` | No other dev server in this checkout. Browser composer/recovery checks with synthetic files and intercepted application routes. This does not exercise real upload conversion or server restart. |
+| `LH_TEST_CHROME=/path/to/chromium node scripts/smoke-session-attachments-runtime.mjs` | Run from a disposable source copy as described in the script header. Real upload, PDF transcription, send and restart checks against a loopback fixture provider, with disposable records and a fresh browser profile. No live account needed. |
 | Other `scripts/smoke-*.mjs` | Standalone/native renderers, image workers, demo helper, compression, file paths, opening. Read each script and the [release guide](desktop-release.md) before running. |
 
 Run checks proportionate to the change. Offline gates prove exercised contracts, not live entitlements or model-authored lesson quality.

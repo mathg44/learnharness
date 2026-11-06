@@ -149,19 +149,19 @@ test("unfocused drop uses the dictation target registry, not the last focused ed
 	f.assertPathOnly();
 });
 
-test("browser drop prevents navigation, explains desktop-only local paths and never infers File.name", async () => {
+test("browser drop without a session composer prevents navigation and never infers a local path", async () => {
 	const f = await fixture({ desktop: false });
 	const transfer = f.transfer([f.file("/not/a/backing/path.pdf")]);
 	const enter = await f.event("dragenter", transfer);
 	assert.equal(enter.defaultPrevented, true);
-	assert.match(f.doc.querySelector('[data-testid="file-path-drop-indicator"]')!.textContent!, /desktop app/);
+	assert.match(f.doc.querySelector('[data-testid="file-path-drop-indicator"]')!.textContent!, /Open the session composer/);
 	const over = await f.event("dragover", transfer);
 	assert.equal(over.defaultPrevented, true);
 	assert.equal(transfer.dropEffect, "copy");
 	const drop = await f.event("drop", transfer);
 	assert.equal(drop.defaultPrevented, true);
-	assert.match(f.status, /Local file paths can only be attached in the desktop app/);
-	assert.match(f.status, /paste a full path instead/);
+	assert.match(f.status, /Open the session composer to attach files/);
+	assert.ok(!f.status.includes("desktop app"));
 	assert.equal(f.doc.querySelector('[data-testid="file-path-drop-indicator"]'), null);
 	assert.equal(f.value, "readthis");
 	assert.deepEqual(f.appends, []);

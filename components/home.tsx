@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CornerDownLeftIcon, DumbbellIcon } from "lucide-react";
+import { DumbbellIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
 import { MinimalHome } from "@/components/minimal-home";
 import { SetupDialog } from "@/components/setup-dialog";
@@ -13,8 +13,8 @@ import { useFieldCycle } from "@/components/field-cycle";
 import { SidebarToggle } from "@/components/sidebar";
 import { StatsBar } from "@/components/stats-bar";
 import { OPENING_PROMPT_FAILURE } from "@/components/opening-prompt";
-import { PathInput } from "@/components/path-input";
-import { AttachFilesButton } from "@/components/attach-files-button";
+import { Composer } from "@/components/composer";
+import { useSessionAttachments } from "@/components/session-attachments";
 import { SessionStarter } from "@/components/start-session";
 import type { TurnUsage } from "@/src/core";
 
@@ -36,6 +36,7 @@ export function Home({
 }) {
 	const router = useRouter();
 	const [topic, setTopic] = useState("");
+	const attachments = useSessionAttachments();
 	/* The topic MIRROR ("nothing gets lost" round, 2026-10-01 — same
 	 * mechanics as the chat composer, owner's consistency ruling): a
 	 * dictation flush lands via setState, invisible to a closure that
@@ -67,11 +68,7 @@ export function Home({
 	 * the keyboard from the stop. Falling edge only; this surface's only
 	 * dictation target IS this textarea, so no case-split is needed. */
 	const topicInputRef = useRef<HTMLDivElement>(null);
-	// Tab navigates INTO the topic composer (owner, keyboard round
-	// 2026-10-06): the only text field on this surface — and home's
-	// composer is its OWN textarea, not the shared Composer component,
-	// so the chain is the ref itself (the smoke caught a selector that
-	// matched nothing here).
+	// Home has one topic field. Use its ref for the keyboard focus cycle.
 	const cycleTopicField = useCallback(
 		(): readonly HTMLElement[] => (topicInputRef.current ? [topicInputRef.current] : []),
 		[],
@@ -112,7 +109,8 @@ export function Home({
 	};
 	const begin = async () => {
 		const t = topicRef.current.trim();
-		if (!t || startingRef.current) return;
+		const files = attachments.snapshot();
+		if ((!t && files.length === 0) || startingRef.current || attachments.busy) return;
 		// Unconfigured: the send INTERCEPTS into the setup flow (the draft
 		// stays in the textarea; the learner sends it after Save).
 		if (!configured) {
@@ -145,10 +143,10 @@ export function Home({
 			// before the learner's first user message, propositions + the
 			// chains among them); the prompt stays the learner's own words.
 			const target = await starterRef.current.start({
-				title: t,
+				title: t || files.map((file) => file.name).join(", "),
 				...(mode === "practice" ? { kind: "practice" } : {}),
 				...(practiceProps.length > 0 ? { graphContext: { propositions: practiceProps } } : {}),
-			}, fetch, JSON.stringify(catalog?.slots.strong));
+			}, fetch, JSON.stringify(catalog?.slots.strong), attachments, t);
 			router.push(target);
 		} catch {
 			startingRef.current = false;
@@ -243,53 +241,26 @@ export function Home({
 						)}
 					/>
 					{startError && <p role="alert" className="mb-2 text-sm text-destructive">{OPENING_PROMPT_FAILURE}</p>}
-					<form
-						data-attachment-composer=""
-						className="flex items-end gap-1.5 rounded-2xl border bg-card p-1.5 shadow-lg"
-					onSubmit={(e) => {
-						e.preventDefault();
-						void start();
-					}}
-				>
-					<PathInput
-						ref={topicInputRef}
-						value={topic}
-						onValueChange={(value) => {
-							topicRef.current = value;
-							setTopic(value);
-						}}
-						defaultDropTarget
-						onKeyDown={(e) => {
-							// Esc ends dictation (the dictate decisions: click-again or
-							// Esc) — stopPropagation claims it (keyboard wave A) so
-							// the window chain doesn't also abort a turn.
-							if (e.key === "Escape" && dictation.active) {
-								e.preventDefault();
-								e.stopPropagation();
-								dictation.cancel();
-								return;
-							}
-							if (e.key === "Enter" && !e.shiftKey) {
-								e.preventDefault();
-								void start();
-							}
-						}}
-						placeholder={mode === "practice" ? "What do you want to practice?" : "What do you want to learn?"}
-						autoFocus
-						className="field-sizing-content lh-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
-					/>
-					<AttachFilesButton editorRef={topicInputRef} />
-					{/* No tooltip on the start square — the ↵ glyph is the
-					    affordance (owner, subtlety round 2026-09-25). */}
-					<button
-						type="submit"
-						aria-label="Start session"
-						disabled={(!topic.trim() && !dictation.active) || busy}
-						className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-primary text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-40"
-					>
-						<CornerDownLeftIcon className="size-5" />
-					</button>
-					</form>
+					{busy && <p role="status" className="mb-2 text-xs text-muted-foreground">Preparing session…</p>}
+					<div data-attachment-composer="" inert={busy} className="overflow-hidden rounded-2xl border bg-card shadow-lg">
+						<Composer
+							busy={false}
+							attachments={attachments}
+							value={topic}
+							onChange={(value) => {
+								topicRef.current = value;
+								setTopic(value);
+							}}
+							onSend={start}
+							onStop={() => {}}
+							canSend={!busy && Boolean(topic.trim() || dictation.active || attachments.items.length)}
+							sendLabel="Start session"
+							inputRef={topicInputRef}
+							onEscape={dictation.active ? dictation.cancel : undefined}
+							placeholder={mode === "practice" ? "What do you want to practice?" : "What do you want to learn?"}
+							autoFocus
+						/>
+					</div>
 					{/* Same as the chat view's under-composer stats bar (owner) — no
 					    session yet, so the LEFT side renders nothing (wave 7 sweep)
 					    while the RIGHT keeps the strong-slot control (fix wave: the

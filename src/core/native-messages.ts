@@ -46,6 +46,12 @@ import {
 import { compactAnswerForModel, type QuestionAnswerData } from "./question-core.ts";
 import { activeCompactionOf, keptIndexFor } from "./compaction.ts";
 import { parseQuestionInput } from "./tool-parts.ts";
+import {
+	sessionAttachmentContent,
+	sessionAttachmentInfo,
+	type PreparedSessionAttachment,
+	type SessionAttachmentInfo,
+} from "./session-attachments.ts";
 
 /** The hard-invariant wording for an aborted turn's unanswered calls —
  *  carried over verbatim from the pre-native era so the model's view
@@ -97,6 +103,12 @@ export type LhMessage = (UserMessage | AssistantMessage | ToolResultMessage | Lh
 	/** CLI-reported effective context budget, not a catalog model maximum.
 	 * App-only metadata: never transmitted as provider/model message content. */
 	cliContextWindow?: number;
+	/** User messages with browser attachments: what the bubble shows as chips.
+	 *  App-only metadata, stripped at the wire like `id`. */
+	sessionAttachments?: SessionAttachmentInfo[];
+	/** The learner's own typed text on a message with attachments (the
+	 *  native content also carries the attachment contents). App-only. */
+	userText?: string;
 };
 
 /** Latest response only: never borrow an older process/model's window when
@@ -178,8 +190,20 @@ export function newMessageId(): string {
 // ─── constructors (the input-event → native append mapping lives in
 //     core/input-events.ts; steers in core/contracts/jobs.ts) ─────────────────
 
-/** A learner-authored user message (text input, verdict note). */
-export function newUserMessage(text: string): LhMessage & UserMessage {
+/** A learner-authored user message (text input, verdict note). With
+ *  prepared attachments the content becomes native text/image blocks and
+ *  the message keeps the typed text and attachment chips as app metadata. */
+export function newUserMessage(text: string, attachments?: readonly PreparedSessionAttachment[]): LhMessage & UserMessage {
+	if (attachments && attachments.length > 0) {
+		return {
+			id: newMessageId(),
+			role: "user",
+			content: sessionAttachmentContent(text, attachments),
+			sessionAttachments: attachments.map(sessionAttachmentInfo),
+			userText: text,
+			timestamp: Date.now(),
+		};
+	}
 	return {
 		id: newMessageId(),
 		role: "user",
@@ -638,8 +662,8 @@ export function toLlmMessages(messages: readonly AgentMessage[]): Message[] {
 			});
 			continue;
 		}
-		// Strip app-only id/CLI context metadata: the wire carries the native shape only.
-		const { id: _id, cliContextWindow: _cliContextWindow, ...native } = m as LhMessage;
+		// Strip app-only id/CLI context/attachment metadata: the wire carries the native shape only.
+		const { id: _id, cliContextWindow: _cliContextWindow, sessionAttachments: _sessionAttachments, userText: _userText, ...native } = m as LhMessage;
 		out.push(native as Message);
 		// Repair unanswered calls from completed generations, not calls in
 		// failed generations. Pi filters error/aborted assistants itself;

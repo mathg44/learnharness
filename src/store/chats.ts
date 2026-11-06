@@ -13,7 +13,8 @@ import { createHash } from "node:crypto";
 import { PATHS } from "../../config.ts";
 import { emit } from "../core/events.ts";
 import type { ChatStore } from "../core/ports.ts";
-import type { ChatRecord, ChatSettings, ChatSummary, ExtractionRunUsage, ImageSnapshot, PlanTree, TurnUsage } from "../core/contracts.ts";
+import type { AttachmentUsage, ChatRecord, ChatSettings, ChatSummary, ExtractionRunUsage, ImageSnapshot, PlanTree, TurnUsage } from "../core/contracts.ts";
+import { isValidAttachmentId, type PreparedSessionAttachment } from "../core/session-attachments.ts";
 import { CURRENT_CHAT_VERSION } from "../core/contracts.ts";
 import type { LhMessage } from "../core/native-messages.ts";
 import { activeProblemOf, danglingQuestionOf } from "../core/native-messages.ts";
@@ -86,7 +87,7 @@ function listChats(): ChatSummary[] {
 			.filter((f) => f.endsWith(".json"))
 			.map((f) => getChat(f.slice(0, -5)))
 			.filter((r): r is ChatRecord => r !== null)
-			.map(({ messages, tree, turns, extractions, imageSnapshots: _imageSnapshots, ...summary }) => {
+			.map(({ messages, tree, turns, extractions, imageSnapshots: _imageSnapshots, attachments: _attachments, attachmentUsage: _attachmentUsage, ...summary }) => {
 				// Per-record isolation (Wave B): a record whose messages fail the
 				// projection (e.g. pre-Wave-B UIMessage-format scratch — the
 				// zero-back-compat wipe makes these "corrupt") must not blank the
@@ -148,6 +149,37 @@ function saveImageSnapshot(id: string, snapshotId: string, image: ImageSnapshot)
 	record.imageSnapshots = { ...record.imageSnapshots, [snapshotId]: {
 		mimeType: image.mimeType, data: image.data, width: image.width, height: image.height,
 	} };
+	writeChat(record);
+}
+
+/** Save one prepared browser attachment under its client id, together with
+ *  the model usage that prepared it (one record write: content and spend
+ *  land together or not at all). Like image snapshots, preparation is not
+ *  conversation activity: updatedAt stays. First write wins for the
+ *  content, so a retried upload never replaces stored contents. */
+function saveSessionAttachment(id: string, attachment: PreparedSessionAttachment, usage?: AttachmentUsage): void {
+	if (!isValidAttachmentId(attachment.id)) throw new Error("Invalid attachment id");
+	const record = getChat(id);
+	if (!record) throw new Error(`Chat not found: ${id}`);
+	const hasContent = record.attachments !== undefined && Object.hasOwn(record.attachments, attachment.id);
+	const hasUsage = !usage || record.attachmentUsage?.some((u) => u.id === usage.id) === true;
+	if (hasContent && hasUsage) return;
+	if (!hasContent) {
+		// A null-prototype-safe copy: never assign through an inherited setter.
+		const next: Record<string, PreparedSessionAttachment> = { ...record.attachments };
+		Object.defineProperty(next, attachment.id, { value: attachment, enumerable: true, writable: true, configurable: true });
+		record.attachments = next;
+	}
+	if (!hasUsage) record.attachmentUsage = [...(record.attachmentUsage ?? []), usage!];
+	writeChat(record);
+}
+
+/** Append one attachment-preparation usage entry, idempotent per entry id. */
+function appendAttachmentUsage(id: string, entry: AttachmentUsage): void {
+	const record = getChat(id);
+	if (!record) throw new Error(`Chat not found: ${id}`);
+	if (record.attachmentUsage?.some((u) => u.id === entry.id)) return;
+	record.attachmentUsage = [...(record.attachmentUsage ?? []), entry];
 	writeChat(record);
 }
 
@@ -232,6 +264,8 @@ export const chatStore: ChatStore = {
 	listChats,
 	saveMessages,
 	saveImageSnapshot,
+	saveSessionAttachment,
+	appendAttachmentUsage,
 	saveTree,
 	saveSettings,
 	renameChat,

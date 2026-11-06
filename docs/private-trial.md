@@ -4,7 +4,7 @@ This is the reduced first-use deployment, not the original full server-hardening
 
 ## Restrictions
 
-`LH_SERVER_TRIAL=1` disables agent filesystem tools, web research, PDF-reader jobs, generated demos, and visual workers. Registry, execution, dispatch, recovery, and worker checks enforce this even if Settings still shows an optional tool as enabled. Uploaded PDF notes can still be converted into graph material; that is not a retained-PDF teaching library. Server-path attachments and image reads through the disabled `read` and `show_image` tools are unavailable.
+`LH_SERVER_TRIAL=1` disables agent filesystem tools, web research, PDF-reader jobs, generated demos, and visual workers. Registry, execution, dispatch, recovery, and worker checks enforce this even if Settings still shows an optional tool as enabled. Uploaded PDF notes can still be transcribed page by page with the configured PDF-reader model and extracted into graph material; that is not a retained-PDF teaching library. Page images go to the configured model provider and can incur usage charges. Server-path attachments and image reads through the disabled `read` and `show_image` tools are unavailable. Browser session uploads are a separate path: explicit file bytes become session-owned text or normalized images without those tools. Session PDFs use the session's selected model and existing connection for page transcription, not a new service or the graph-import pipeline.
 
 The existing Docker isolation remains: non-root, read-only application files, dropped capabilities, dedicated data/auth volumes, and no host-home or Docker-socket mounts. Only host loopback publishes port 3000. Do not change that to a wildcard, LAN, or Tailscale address.
 
@@ -48,7 +48,7 @@ tailscale serve --bg --https=443 http://127.0.0.1:3000
 
 Do not run that blindly on a host with existing routes. Inspect the route and Funnel configuration first, preserve unrelated services, and verify the actual backend headers. Serve strips client-supplied Tailscale identity headers, but the app's authority depends on keeping the backend loopback-only. See [Tailscale Serve identity headers](https://tailscale.com/kb/1312/serve#identity-headers).
 
-Configure models under Settings using the upstream custom endpoint editor. The trial's main model feeds teaching/practice; the Cheap slot feeds extraction/audit. The Vision slot is dormant while its workers are disabled. Model-list discovery does not prove context size, reasoning support or image understanding. Without supplied metadata or explicit pins, upstream's 8192-context and 4096-output fallbacks remain in effect. Change budgets only to values supported by the actual backend.
+Configure models under Settings using the upstream custom endpoint editor. The trial's main model feeds teaching/practice; the Cheap slot feeds extraction/audit. The Vision slot is used for PDF note transcription; visual workers and PDF-reader jobs remain disabled. Model-list discovery does not prove context size, reasoning support or image understanding. Without supplied metadata or explicit pins, upstream's 8192-context and 4096-output fallbacks remain in effect. Change budgets only to values supported by the actual backend.
 
 ## Manual snapshot before updates
 
@@ -103,7 +103,7 @@ This is a source update, not a deployment. Upstream `713377f` supplies v0.5.0. T
   ```
 
 - [ ] Open `http://127.0.0.1:3001/`. Expect a fresh learner profile, not the trial's saved lessons.
-- [ ] Hover over the composer paperclip. Expect the browser-only explanation and an unavailable attachment button, not a host file picker or upload. Native file/folder selection remains desktop-only.
+- [ ] Click the composer paperclip. Expect a browser file picker for session uploads, not local-path insertion or a native folder menu. Without sending, select synthetic text/PDF files, then paste an image into the composer. Expect all files to remain listed with removal controls. Upload and model processing begin only when Send is pressed; do not send during this unconfigured check.
 - [ ] Open Settings, then Agent, then Prompts. Expect a Practice prompt group. Open the Graph settings and expect an Extraction switch. Do not enable providers or start extraction.
 - [ ] Stop only this development server with Ctrl+C. This check runs without trial mode so the local browser can inspect the upstream interface. It does not verify live ingress.
 
@@ -117,8 +117,8 @@ This is a source update, not a deployment. Upstream `713377f` supplies v0.5.0. T
 
 ## Next session
 
-The private trial is accepted and the deployment tickets are closed. Earlier full-milestone tickets were superseded or deferred, not implemented in full. Future work starts with the owner's next request, not by reopening that backlog.
+The reduced installation was accepted, but it is not the final product target. The owner has approved a permanent single-owner installation with all upstream capabilities restored under suitable isolation. [The permanent-installation plan and its linked issues](https://github.com/mathg44/learnharness/issues/31) track that work. The original deployment tickets remain historical; their closure did not implement the full milestone. This guide describes the current restrictions until the permanent installation is implemented and its cutover is approved.
 
 Keep the running trial unchanged while the owner uses it. Obtain fresh approval before a restart, update, ingress change, or additional real-provider testing. Take a consistent stopped-app data/auth snapshot before replacing a version with learning records. No scheduled backup or restore exercise has been completed.
 
-Source changes are on `server-deployment`. Host-local handoff details are in `.git/pi-issue/private-trial-handoff.md`; that file and the private deployment configuration are excluded from source publication. Read that handoff before operating this host's trial, and inspect current runtime state rather than assuming it still matches this session.
+The fork's canonical integration branch is `main`; `server-deployment` is kept synchronized with merged work. Host-local handoff details are in `.git/pi-issue/private-trial-handoff.md`; that file and the private deployment configuration are excluded from source publication. Read that handoff before operating this host's trial, and inspect current runtime state rather than assuming it still matches this session.

@@ -7,9 +7,9 @@
  * source record (the file's provenance + the run's usage), and runs
  * extractor → auditor → merger over the raw text.
  *
- * A PDF (spotted by its %PDF- header, not its name) is converted to
- * Markdown first. A PDF with nothing to extract is refused before any
- * model call or source record.
+ * A PDF (spotted by its %PDF- header, not its name) is transcribed page by
+ * page by the configured PDF-reader model before graph extraction. A failed
+ * page refuses that file rather than importing an incomplete transcription.
  *
  * Small concurrency cap: the model calls are the slow part, and a burst of
  * 25 simultaneous runs would trip provider rate limits — a 3-wide worker
@@ -17,7 +17,7 @@
  * healthy. The dock's chips + graph refetch track progress live through
  * /api/graph/status, as with session runs.
  */
-import { convertPdf, extraction, joinPages, NotesImportError, sourceDirectory } from "@/src/server";
+import { extraction, NotesImportError, sourceDirectory } from "@/src/server";
 import { MAX_IMPORT_BODY_BYTES, MAX_IMPORT_BYTES, validNotesPath } from "@/lib/notes-import-limits.ts";
 import {
 	emit,
@@ -44,33 +44,20 @@ interface ImportResult {
 	/** The key-refusal specifics (provider_key_missing only). */
 	provider?: string;
 	slots?: string[];
-	/** Shown beside a completed import (every PDF: scanner text may be wrong). */
+	/** Shown beside a completed PDF import to disclose model transcription. */
 	notice?: string;
 }
 
-const MAX_PDF_PAGES = 1000;
 const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46, 0x2d]; // "%PDF-"
+const PDF_NOTICE = "Every PDF page was sent to the PDF-reader model for transcription. Check for recognition errors.";
 
-type NotesFile = { kind: "notes"; text: string; notice?: string } | { kind: "refused"; error: string };
+type NotesFile = { text: string; pdf?: Uint8Array; notice?: string };
 
-/** A PDF becomes page-marked Markdown; any other file is read as text, as before. */
+/** Keep uploaded PDFs as bytes. The pipeline owns admission, transcription and usage. */
 async function readNotesFile(file: File): Promise<NotesFile> {
 	const bytes = new Uint8Array(await file.arrayBuffer());
-	if (!PDF_MAGIC.every((byte, i) => bytes[i] === byte)) return { kind: "notes", text: new TextDecoder().decode(bytes) };
-	const pdf = await convertPdf(bytes, MAX_PDF_PAGES);
-	switch (pdf.kind) {
-		case "unreadable":
-			return { kind: "refused", error: "Could not open this PDF." };
-		case "too-long":
-			return { kind: "refused", error: "Too long. Max 1,000 pages." };
-		case "converted": {
-			const text = joinPages(pdf.pages);
-			if (!text) return { kind: "refused", error: "OCR not supported yet." };
-			const skipped = pdf.pages.filter((page) => page.kind === "image-only").length;
-			const omission = skipped > 0 ? ` Skipped ${skipped} image-only ${skipped === 1 ? "page" : "pages"}; OCR is not supported.` : "";
-			return { kind: "notes", text, notice: `Scanned pages may have errors.${omission}` };
-		}
-	}
+	if (!PDF_MAGIC.every((byte, i) => bytes[i] === byte)) return { text: new TextDecoder().decode(bytes) };
+	return { text: "", pdf: bytes, notice: PDF_NOTICE };
 }
 
 class ImportBodyLimitError extends Error {}
@@ -146,12 +133,8 @@ export async function POST(request: Request) {
 			const { file, requestIndex, filePath } = next;
 			try {
 				const notes = await readNotesFile(file);
-				if (notes.kind === "refused") {
-					results.push({ filePath, requestIndex, outcome: "failed", ok: false, error: notes.error });
-					continue;
-				}
 				sourceDirectory.registerImport(filePath);
-				const stats = await extraction.importNotes({ filePath, text: notes.text });
+				const stats = await extraction.importNotes({ filePath, text: notes.text, ...(notes.pdf ? { pdf: notes.pdf } : {}) });
 				results.push({ filePath, requestIndex, outcome: "completed", ok: true, stats, ...(notes.notice ? { notice: notes.notice } : {}) });
 			} catch (err) {
 				if (err instanceof ModelsNotConfiguredError) {

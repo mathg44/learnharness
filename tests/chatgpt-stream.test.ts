@@ -9,6 +9,7 @@ import { backgroundCaptureDir, backgroundCaptureStream, createBackgroundCapture 
 import { piModels, piEngineForSpec } from "../src/agent/models.ts";
 import { chatGPTAbortController, chatGPTModels, refreshChatGPTModels } from "../src/agent/chatgpt-bridge.ts";
 import { chatGPTHistory, chatGPTPayload } from "../src/agent/chatgpt-stream.ts";
+import { usageWasAdmitted } from "../src/agent/subscription-request-cycle.ts";
 
 const originalSend = Object.getOwnPropertyDescriptor(process, "send");
 const originalConnected = Object.getOwnPropertyDescriptor(process, "connected");
@@ -71,6 +72,7 @@ test("alias resolves only OAuth; native Responses body is stateless/namespaced, 
 	for await (const event of stream) { events.push(event); if ("partial" in event) assert.equal(event.partial.provider, "chatgpt"); }
 	const result = await stream.result();
 	assert.equal(result.provider, "chatgpt"); assert.equal(result.stopReason, "toolUse");
+	assert.equal(usageWasAdmitted(result.usage), true, "dispatched replies remain billable");
 	assert.equal(requests.length, 1); assert.equal(requests[0]!.url, "https://api.openai.com/v1/responses");
 	assert.equal(requests[0]!.authorization, "Bearer scratch-oauth-only");
 	const body = requests[0]!.body;
@@ -118,7 +120,9 @@ test("OAuth failure and background denial NEVER use ambient OPENAI_API_KEY", asy
 	for (const error of ["expired ChatGPT session", "Background use is off", "catalog unavailable", "quota exceeded"]) {
 		leaseError = error;
 		const engine = piEngineForSpec({ provider: "chatgpt", id: model.id }, true);
-		assert.equal((await engine.streamFn(engine.model, context()).result()).stopReason, "error");
+		const result = await engine.streamFn(engine.model, context()).result();
+		assert.equal(result.stopReason, "error");
+		assert.equal(usageWasAdmitted(result.usage), false, "denied requests must not create transcription usage or subscription runs");
 	}
 	leaseError = null;
 	assert.equal(requests.length, 0);

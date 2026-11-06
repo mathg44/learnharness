@@ -262,6 +262,18 @@ export class SessionModel {
 	/** Retain the latest request across stop(): an opening POST still owns
 	 * its refusal after view detachment, but never after a newer request. */
 	private latestRequest: AbortController | null = null;
+	/* THE VIEW LIFECYCLE (attachment openings, 2026-11-05): the hook marks
+	 * when a mounted view is listening. React StrictMode replays mount
+	 * effects (detach, then attach) while an opening POST is unacknowledged;
+	 * the POST is deliberately not abortable, so its acceptance must still
+	 * reach the canonical record for the reattached view. Attachment sends
+	 * have no optimistic bubble, so without this the view stayed empty.
+	 * A true unmount never reattaches: nothing is read for a gone view. */
+	private viewAttached = false;
+	/** The request whose consume the last view detach interrupted. */
+	private detachedRequest: AbortController | null = null;
+	/** Accepted while no view was attached: adopt on the next attach. */
+	private admittedWhileDetached: AbortController | null = null;
 	/** Synchronous ready check for the gate (send/read mount logic). */
 	readyRef = true;
 
@@ -697,7 +709,9 @@ export class SessionModel {
 		// write-ahead will persist (inputAppends), with LOCAL ids so
 		// adoption can tell them from the record's absorbed copies.
 		const optimistic: LhMessage[] = [];
-		if (input.type === "text") optimistic.push({ ...newUserMessage(input.text), id: localId() });
+		// Attachment contents and metadata are resolved by the server. Wait for
+		// the admission refetch rather than inventing an incomplete local card.
+		if (input.type === "text" && !input.attachmentIds?.length) optimistic.push({ ...newUserMessage(input.text), id: localId() });
 		else if (input.type === "thinking") {
 			// The practice submissions (2026-10-04): the marker lands
 			// optimistically — the card renders from its details the
@@ -761,7 +775,17 @@ export class SessionModel {
 			// A stop() or a newer send/consume won while the ack was in
 			// flight: the turn is live server-side either way — do not attach
 			// a stream from a view that is gone or superseded.
-			if (this.consumeAbort !== controller) return true;
+			if (this.consumeAbort !== controller) {
+				// Only a view detach stopped it: adopt for the reattached view
+				// now, or on the next attach. A true unmount reads nothing.
+				if (this.interruptedByDetach(controller)) {
+					if (this.viewAttached) {
+						this.detachedRequest = null;
+						await this.resumeStream(true);
+					} else this.admittedWhileDetached = controller;
+				}
+				return true;
+			}
 			await this.resumeStream(true);
 			return true;
 		} catch (err) {
@@ -891,9 +915,39 @@ export class SessionModel {
 		}
 	}
 
+	/** A mounted view is listening (the hook's mount effect). Completes an
+	 *  admission that landed while the view was detached. */
+	attachView(): void {
+		this.viewAttached = true;
+		const owed = this.admittedWhileDetached;
+		this.admittedWhileDetached = null;
+		if (owed && this.interruptedByDetach(owed)) {
+			this.detachedRequest = null;
+			void this.resumeStream(true);
+		}
+	}
+
+	/** The view went away (the hook's cleanup): release the consume like
+	 *  stop(), remembering which request the detach interrupted. */
+	detachView(): void {
+		const interrupted = this.consumeAbort;
+		this.viewAttached = false;
+		this.stop();
+		this.detachedRequest = interrupted;
+	}
+
+	/** Only the detach stopped this request: no newer send/reattach and no
+	 *  explicit stop since. */
+	private interruptedByDetach(controller: AbortController): boolean {
+		return this.consumeAbort === null && this.latestRequest === controller && this.detachedRequest === controller;
+	}
+
 	/** Local detach: cancel the consume, keep the partial tail. The page's
 	 *  settle watch adopts the record when the server turn finishes. */
 	stop(): void {
+		// An explicit stop cancels any detach recovery (Stop means stop).
+		this.detachedRequest = null;
+		this.admittedWhileDetached = null;
 		this.consumeAbort?.abort();
 		this.consumeAbort = null;
 		this.streamingIds = new Set();

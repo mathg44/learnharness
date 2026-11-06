@@ -25,6 +25,8 @@ import { MalformedQuestion } from "@/components/malformed-question";
 import { artifactRenderers } from "@/components/artifacts";
 import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { ChatSessionComposer } from "@/components/composer";
+import { useSessionAttachments } from "@/components/session-attachments";
+import { SavedSessionAttachments } from "@/components/saved-session-attachments";
 import { useEnterSubmits } from "@/components/enter-submits";
 import { blurAfterPointerClick } from "@/components/focus-hygiene";
 import { dockStateKey } from "@/components/dock-state-key";
@@ -47,6 +49,7 @@ import {
 	type ChatSettings,
 	type LhMessage,
 	type ModelSlotName,
+	type SessionAttachmentInfo,
 } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia, planExists } from "@/components/plan-window";
@@ -557,6 +560,14 @@ export function Chat({
 	// session's current phase.
 	const phases = useMemo(() => phaseTimeline(messages), [messages]);
 
+	const attachments = useSessionAttachments();
+	const attachmentsRef = useRef(attachments);
+	attachmentsRef.current = attachments;
+	const attachmentSendingRef = useRef(false);
+	const openingAttachmentsRef = useRef<SessionAttachmentInfo[]>([]);
+	/** An existing-chat attachment send without an observed acknowledgment.
+	 *  The server may still have saved it; a canonical read decides. */
+	const uncertainAttachmentSendRef = useRef<(AttachmentSendAttempt & { draftText: string }) | null>(null);
 	const [composerDraftRevision, setComposerDraftRevision] = useState(0);
 	/* The composer draft ref is synchronous, so sends and dictation flushes
 	 * read the latest text without a parent render per input event. Explicit
@@ -590,11 +601,12 @@ export function Chat({
 		return () => { openingMountedRef.current = false; };
 	}, []);
 
-	const deliverOpeningPrompt = useCallback((prompt: string) => {
+	const deliverOpeningPrompt = useCallback((prompt: string, prepared: readonly SessionAttachmentInfo[] = []) => {
 		openingDraftRef.current = prompt;
+		openingAttachmentsRef.current = [...prepared];
 		// Persist uncertainty BEFORE the POST: another mount must restore,
 		// not race the still-arriving request. No storage means no auto-send.
-		if (!stashOpeningPrompt(chatId, prompt, true)) {
+		if (!stashOpeningPrompt(chatId, prompt, true, prepared)) {
 			applyText(prompt);
 			setOpeningError(true);
 			return;
@@ -602,8 +614,10 @@ export function Chat({
 		setOpeningError(false);
 		draftRef.current = prompt; // The existing 503 flow must restore it too.
 		applyText("");
-		void send({ type: "text", text: prompt }, () => {
+		void send({ type: "text", text: prompt, ...(prepared.length ? { attachmentIds: prepared.map((file) => file.id) } : {}) }, () => {
 			clearOpeningPrompt(chatId);
+			attachmentsRef.current.clear(prepared.map((file) => file.id));
+			openingAttachmentsRef.current = [];
 			openingDraftRef.current = null;
 			if (draftRef.current === prompt) draftRef.current = null;
 		}).then(accepted => {
@@ -619,16 +633,19 @@ export function Chat({
 		sentInitial.current = true;
 		const entry = readOpeningPromptEntry(chatId);
 		const prompt = initialPrompt || entry?.text; // Legacy links still work.
-		if (!initialPromptOwed(initialMessages, prompt)) {
+		const prepared = entry?.attachments ?? [];
+		if (!initialPromptOwed(initialMessages, prompt, prepared)) {
 			if (initialMessages.some(m => m.role === "user" || m.role === "assistant")) clearOpeningPrompt(chatId);
 			return;
 		}
 		openingDraftRef.current = prompt!;
+		openingAttachmentsRef.current = prepared;
+		attachmentsRef.current.restore(prepared, chatId);
 		if (entry?.attempted || initiallyInFlight) {
 			applyText(prompt!); // Interrupted start: the learner explicitly resends.
 			return;
 		}
-		deliverOpeningPrompt(prompt!);
+		deliverOpeningPrompt(prompt!, prepared);
 	}, [chatId, initialPrompt, initialMessages, initiallyInFlight, deliverOpeningPrompt, applyText]);
 
 	useEffect(() => {
@@ -640,8 +657,26 @@ export function Chat({
 		if (opening !== null && textRef.current === opening) applyText("");
 		if (draftRef.current === opening) draftRef.current = null;
 		openingDraftRef.current = null;
+		attachmentsRef.current.clear(openingAttachmentsRef.current.map((file) => file.id));
+		openingAttachmentsRef.current = [];
 		setOpeningError(false);
 	}, [chatId, hasConfirmedConversation, applyText]);
+
+	// A lost acknowledgment does not prove the send failed. Once a canonical
+	// message carries the submitted files, drop exactly those from the tray
+	// (so Send cannot post them twice) and the text only if it is unchanged.
+	// Newer edits and newly staged files stay. Nothing is resent.
+	useEffect(() => {
+		const attempt = uncertainAttachmentSendRef.current;
+		if (!attempt) return;
+		const proof = provenAttachmentSend(attempt, nativeMessages);
+		if (!proof) return;
+		uncertainAttachmentSendRef.current = null;
+		attachmentsRef.current.clear(proof.ids);
+		if (!proof.sameText) return;
+		if (textRef.current === attempt.draftText) applyText("");
+		if (draftRef.current === attempt.text) draftRef.current = null;
+	}, [nativeMessages, applyText]);
 
 	// THE BYOK REFUSAL (owner, 2026-09-22): a send that lands the server's
 	// 503 models_not_configured envelope renders as the SETUP FLOW, never
@@ -753,6 +788,8 @@ export function Chat({
 	const retryable = (status === "ready" || status === "error") && !busy && !compacting && endsInFailedTurn(nativeMessages);
 	const retryFailedTurn = () => retryFailedResponse(send, draftRef);
 	const sendAllowed = !pending && !activeProblem && !compacting;
+	const attachmentSendGate = useRef(false);
+	attachmentSendGate.current = busy || !sendAllowed;
 
 	/* THE PRACTICE PAUSE (owner round 16): between problems — practice
 	 * kind, nothing active, nothing in flight, and at least one problem
@@ -1213,8 +1250,10 @@ export function Chat({
 	};
 	const doSend = () => {
 		if (busy || pending || compacting) return;
-		const t = textRef.current.trim();
-		if (!t) return;
+		const draftText = textRef.current;
+		const t = draftText.trim();
+		const files = attachments.snapshot();
+		if ((!t && files.length === 0) || attachmentSendingRef.current || attachments.busy) return;
 		if (zeroKeys) {
 			setSetupOpen(true);
 			return;
@@ -1222,6 +1261,37 @@ export function Chat({
 		if (selectedModelUnavailable(catalog, selectedModel)) {
 			openModelPicker();
 			return; // No optimistic send and no change to the learner's draft.
+		}
+		if (files.length > 0) {
+			attachmentSendingRef.current = true;
+			void (async () => {
+				try {
+					// Preparation can log PDF transcription usage even when it fails
+					// or no turn follows, so the stats re-read either way.
+					const prepared = await attachments.prepare(chatId).finally(() => { void syncTurns(); });
+					if (attachmentSendGate.current) return;
+					if (openingDraftRef.current !== null) {
+						deliverOpeningPrompt(t, prepared);
+						return;
+					}
+					// This draft stays visible until admission. Refusal recovery
+					// must not replace newer edits with the submitted text.
+					draftRef.current = null;
+					const attempt = { ids: prepared.map((file) => file.id), text: t, draftText };
+					uncertainAttachmentSendRef.current = attempt;
+					await send({ type: "text", text: t, attachmentIds: attempt.ids }, () => {
+						if (uncertainAttachmentSendRef.current === attempt) uncertainAttachmentSendRef.current = null;
+						attachmentsRef.current.clear(attempt.ids);
+						if (textRef.current === attempt.draftText) applyText("");
+						if (draftRef.current === t) draftRef.current = null;
+					});
+				} catch (err) {
+					attachmentsRef.current.setError(err instanceof Error ? err.message : "Could not prepare the attachments. Try again.");
+				} finally {
+					attachmentSendingRef.current = false;
+				}
+			})();
+			return;
 		}
 		if (openingDraftRef.current !== null) {
 			deliverOpeningPrompt(t);
@@ -1242,7 +1312,11 @@ export function Chat({
 	 * time the send's POST resolved, so the steer lands. Idle takes the
 	 * plain send; a raced settle 409s and falls back to exactly that. */
 	const doSteerOrSend = () => {
-		if (pending || compacting) return;
+		if (pending || compacting || attachments.busy) return;
+		if (attachments.snapshot().length > 0) {
+			if (!busy) doSend();
+			return;
+		}
 		const t = textRef.current.trim();
 		if (!t) return;
 		if (busy) {
@@ -1428,7 +1502,7 @@ export function Chat({
 								// assistant group — is gone). Never a user bubble: the wake is
 								// scaffolding; the model-facing instruction lives in the adapter.
 								<PhaseDivider key={m.id || `m-${mi}`} phase="plan" />
-							) : m.role === "user" && m.parts.length > 0 && m.parts.every((p) => p.type.startsWith("data-")) ? (
+							) : m.role === "user" && m.parts.length > 0 && m.parts.every((p) => p.type.startsWith("data-") && p.type !== "data-session-attachment") ? (
 								// Marker cards (custom messages, 2026-10-04): user-side
 								// scaffolding — the graph-context pick, the practice
 								// thinking trace — render as cards in the transcript
@@ -1520,6 +1594,7 @@ export function Chat({
 												<div className="lh-prose whitespace-pre-wrap text-foreground">
 													<PathText text={m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")} />
 												</div>
+												<SavedSessionAttachments chatId={chatId} attachments={m.parts.filter((part) => part.type === "data-session-attachment").map((part) => part.data as SessionAttachmentInfo)} />
 											</div>
 									) : (
 									<Message from="assistant" className="max-w-full">
@@ -1740,6 +1815,7 @@ export function Chat({
 							// abort channel kills it server-side; stop() alone would
 							// only detach our view.
 							busy={busy}
+							attachments={attachments}
 							value={textRef.current}
 							revision={composerDraftRevision}
 							onChange={recordComposerText}
@@ -1865,8 +1941,25 @@ export type EscAbortTarget = "mermaid" | "plan" | "setup" | "question" | "proble
  * (owner report, 2026-10-04: the turn went dead behind it — the old
  * `length === 0` check saw the marker and refused to fire).
  */
-export function initialPromptOwed(messages: readonly { role: string }[], prompt: string | undefined): boolean {
-	if (!prompt) return false;
+export type AttachmentSendAttempt = { ids: readonly string[]; text: string };
+
+/** Delivery proof for an attachment send whose acknowledgment was lost:
+ *  the first user message whose server-resolved attachment metadata carries
+ *  any submitted id. Returns the submitted ids it carries and whether it
+ *  saved the submitted (trimmed) text. Optimistic bubbles never carry
+ *  attachment metadata, so they prove nothing. */
+export function provenAttachmentSend(attempt: AttachmentSendAttempt, messages: readonly LhMessage[]): { ids: string[]; sameText: boolean } | null {
+	const submitted = new Set(attempt.ids);
+	for (const message of messages) {
+		if (message.role !== "user" || !message.sessionAttachments) continue;
+		const ids = message.sessionAttachments.map((info) => info.id).filter((id) => submitted.has(id));
+		if (ids.length > 0) return { ids, sameText: (message.userText ?? "").trim() === attempt.text };
+	}
+	return null;
+}
+
+export function initialPromptOwed(messages: readonly { role: string }[], prompt: string | undefined, attachments: readonly SessionAttachmentInfo[] = []): boolean {
+	if (!prompt && attachments.length === 0) return false;
 	return !messages.some((m) => m.role === "user" || m.role === "assistant");
 }
 
