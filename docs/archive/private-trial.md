@@ -1,5 +1,7 @@
 # Private server trial
 
+> Archived. The trial's `LH_SERVER_TRIAL*` variables, `compose.trial.yaml` and the commands below no longer exist in the source. For the current installation and the migration from this trial, see the [private server guide](../private-server.md).
+
 This is the reduced first-use deployment, not the original full server-hardening milestone. It keeps upstream teaching, practice, confidence input, mathematics, the knowledge graph, and uploaded-note imports. The desktop profile is unchanged.
 
 ## Restrictions

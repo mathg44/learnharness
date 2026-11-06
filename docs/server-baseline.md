@@ -1,6 +1,6 @@
 # Verified upstream baseline for the fork
 
-The sections through "Blockers and next-ticket boundaries" record the historical 2026-11-04 verification of upstream v0.4.1 for issue #1. Their results and blockers describe that revision, not the current trial. See [the post-v0.5.0 patch notes](#compatible-dependency-patches-after-v050) below for the current dependency update and [the private-trial guide](private-trial.md) for current operating restrictions.
+The sections through "Blockers and next-ticket boundaries" record the historical 2026-11-04 verification of upstream v0.4.1 for issue #1. Their results and blockers describe that revision, not the current installation. See [the post-v0.5.0 patch notes](#compatible-dependency-patches-after-v050) below for the current dependency update and [the private server guide](private-server.md) for current operating restrictions.
 
 ## Scope and provenance
 
@@ -226,7 +226,7 @@ These audit results describe different revisions:
 
 The selected package advisories are absent from the patched report. Counts are date-dependent, not proof of exploitability or complete dependency safety. Independent Node 26 verification of `90a8905` passed 3,579 tests with four skips, typecheck, lint, build and subscription smoke. Lint retains one existing warning.
 
-Chromium BiDi's Zod 3 dependency, minimatch and linkify-it remain deferred. Their fixes need separate parent compatibility work. Do not force nested major substitutions or use `npm audit fix --force`. The historical blockers above are not a current deployment assessment. This patch provides no new deployment sign-off: a trial update still needs separate owner approval and a consistent stopped-app data/auth snapshot under [the private-trial guide](private-trial.md). No live provider or deployment operation is part of this update.
+Chromium BiDi's Zod 3 dependency, minimatch and linkify-it remain deferred. Their fixes need separate parent compatibility work. Do not force nested major substitutions or use `npm audit fix --force`. The historical blockers above are not a current deployment assessment. This patch provides no new deployment sign-off: a trial update still needs separate owner approval and a consistent stopped-app data/auth snapshot under [the private-trial guide](archive/private-trial.md), now archived. No live provider or deployment operation is part of this update.
 
 ### Operator verification
 

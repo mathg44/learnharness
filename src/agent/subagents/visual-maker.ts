@@ -11,7 +11,7 @@ import type { LearnerImage } from "../tools/learner-image.ts";
 import { embedLearnerImage, LEARNER_IMAGE_HREF } from "../../core/learner-image-svg.ts";
 import { annotationPlacementProblem } from "./annotation-svg.ts";
 import { getHeadless, type HeadlessApi } from "./headless.ts";
-import { isServerTrialEnabled } from "../../core/server-trial.ts";
+import { serverJobBlockReason } from "../../core/server-capabilities.ts";
 
 /**
  * The visual-maker sub-agent (vision §2.5): authors ONE precise SVG from a
@@ -166,12 +166,13 @@ export async function runVisualMaker(input: VisualMakerInput, opts: VisualMakerO
 	const brief = input.brief.trim() || "(no brief)";
 	const maxIterations = opts.maxIterations ?? 8;
 
-	// THE SERVER-TRIAL GATE, direct-entrypoint layer (core/server-trial.ts):
+	// THE SERVER CAPABILITY GATE, direct-entrypoint layer (core/server-capabilities.ts):
 	// the runner already refuses "visual" jobs before this is ever called —
 	// this guard covers any other caller, so the headless/resvg render path
-	// never starts under the trial no matter the call path.
-	if (isServerTrialEnabled()) {
-		return { svg: "", notes: "FAILED: visual figures are disabled in this server trial (LH_SERVER_TRIAL=1)" };
+	// never starts while the capability is unavailable, whatever the call path.
+	const serverBlock = serverJobBlockReason("visual");
+	if (serverBlock) {
+		return { svg: "", notes: `FAILED: ${serverBlock}` };
 	}
 
 	const reason = headless.unavailableReason();

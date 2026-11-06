@@ -12,5 +12,6 @@ For current guidance, start with the [documentation index](../README.md), [archi
 | [Probe → teach split](probe-teach-split.md) | September agent/phase design and later amendments. |
 | [Pi engine swap](pi-engine-swap.md) | 2026-09-12 migration proposal; the current runtime has moved beyond its proposed wire/record design. |
 | [First release planning](release-0.3.md) | 2026-10-06 polish ideas and compatibility discussion, not a release runbook. |
+| [Private server trial](private-trial.md) | 2026-11 reduced owner-only deployment, its evidence and merge checks. Replaced by the [private server guide](../private-server.md); its `LH_SERVER_TRIAL*` variables and `compose.trial.yaml` no longer exist. |
 
 The substantive text is retained, with archive notices and navigation repairs. References to missing design notes or a private Obsidian vault are historical citations, not bundled documentation or permission to access private sources. Do not use archived cleanup/data-wipe instructions on current user profiles.

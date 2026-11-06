@@ -1,8 +1,0 @@
-# Use with compose.yaml and an explicit private --env-file outside the checkout.
-services:
-  app:
-    image: learnharness:trial
-    environment:
-      LH_SERVER_TRIAL: "1"
-      LH_SERVER_TRIAL_OWNER: ${LH_SERVER_TRIAL_OWNER:?Set the owner Tailscale login}
-      LH_SERVER_TRIAL_ORIGIN: ${LH_SERVER_TRIAL_ORIGIN:?Set the Tailscale HTTPS origin}

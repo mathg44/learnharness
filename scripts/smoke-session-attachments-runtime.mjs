@@ -8,7 +8,7 @@
  * /api/chats/:id/attachments, retry the same ids, send them through
  * /api/chat, then upload and send again from Chromium's real file picker.
  * Phase 2: stop the owned server, restart it on the same port and scratch
- * profile in trial mode (synthetic owner/origin; fake Tailscale headers), and
+ * profile in server mode (synthetic origin; fake Tailscale headers), and
  * check the record, image endpoint, upload retry and browser previews are
  * identical, with zero new model calls.
  *
@@ -176,8 +176,8 @@ await once(probe, "listening");
 const port = probe.address().port;
 await new Promise(resolve => probe.close(resolve));
 const origin = `http://127.0.0.1:${port}`;
-const TRIAL_OWNER = "smoke-owner@example.invalid";
-const TRIAL_ORIGIN = `https://127.0.0.1:${port}`; // Host matches the loopback address; never resolved
+const SERVER_LOGIN = "smoke-learner@example.invalid";
+const SERVER_ORIGIN = `https://127.0.0.1:${port}`; // Host matches the loopback address; never resolved
 const baseEnv = {
 	PATH: process.env.PATH, HOME: home, TMPDIR: home, NODE_ENV: "development",
 	LH_DATA_DIR: dataDir, LH_AUTH_FILE: authFile, LH_IGNORE_ENV_KEYS: "1", NEXT_TELEMETRY_DISABLED: "1",
@@ -220,12 +220,12 @@ async function stopApp() {
 	await stopOwnedSmokeServer(owned, { graceMs: 5000, killMs: 5000 });
 }
 
-/** node:http, so trial checks can carry a Host-matched synthetic identity. */
-let trialHeaders = null;
+/** node:http, so server-mode checks can carry a Host-matched synthetic identity. */
+let serverHeaders = null;
 async function call(method, route, { json, form, headers = {}, timeout = 240000 } = {}) {
 	let body;
-	const sent = { ...(trialHeaders ?? {}) };
-	if (method !== "GET") sent.origin = trialHeaders ? TRIAL_ORIGIN : origin;
+	const sent = { ...(serverHeaders ?? {}) };
+	if (method !== "GET") sent.origin = serverHeaders ? SERVER_ORIGIN : origin;
 	if (json !== undefined) { body = Buffer.from(JSON.stringify(json)); sent["content-type"] = "application/json"; }
 	if (form) {
 		const encoded = new Response(form);
@@ -464,14 +464,14 @@ try {
 	const callsBeforeRestart = calls.length;
 	await stopApp();
 
-	// ══ Phase 2: restart the same profile and port, trial mode ══
-	await startApp({ LH_SERVER_TRIAL: "1", LH_SERVER_TRIAL_OWNER: TRIAL_OWNER, LH_SERVER_TRIAL_ORIGIN: TRIAL_ORIGIN });
-	assert.equal((await call("GET", `/api/chats/${id}`)).status, 403, "trial: no identity is denied");
-	assert.equal((await call("GET", `/api/chats/${id}`, { headers: { "tailscale-user-login": "someone@example.invalid" } })).status, 403, "trial: wrong owner is denied");
-	trialHeaders = { "tailscale-user-login": TRIAL_OWNER, "x-forwarded-proto": "https", "x-forwarded-host": `127.0.0.1:${port}` };
-	assert.equal((await call("POST", `/api/chats/${id}/attachments`, { form: uploadForm(entries), headers: { origin } })).status, 403, "trial: wrong-origin upload denied");
-	assert.equal((await call("GET", `/api/chats/${id}/attachments/${ids.board}`, { headers: { "tailscale-user-login": undefined } })).status, 403, "trial: image route needs identity");
-	checks.push("restart in trial mode: missing/wrong identity and wrong-origin upload are 403, including the image route");
+	// ══ Phase 2: restart the same profile and port, server mode ══
+	await startApp({ LH_SERVER_MODE: "tailscale", LH_SERVER_ORIGIN: SERVER_ORIGIN });
+	assert.equal((await call("GET", `/api/chats/${id}`)).status, 403, "server: no identity is denied");
+	assert.equal((await call("GET", `/api/chats/${id}`, { headers: { "tailscale-user-login": SERVER_LOGIN } })).status, 403, "server: identity without HTTPS forwarding is denied");
+	serverHeaders = { "tailscale-user-login": SERVER_LOGIN, "x-forwarded-proto": "https", "x-forwarded-host": `127.0.0.1:${port}` };
+	assert.equal((await call("POST", `/api/chats/${id}/attachments`, { form: uploadForm(entries), headers: { origin } })).status, 403, "server: wrong-origin upload denied");
+	assert.equal((await call("GET", `/api/chats/${id}/attachments/${ids.board}`, { headers: { "tailscale-user-login": undefined } })).status, 403, "server: image route needs identity");
+	checks.push("restart in server mode: missing identity, plain-http forwarding and wrong-origin upload are 403, including the image route");
 
 	const restarted = await chatJson(id);
 	assert.deepEqual(durable(restarted), snapshot, "record identical after restart");
@@ -481,21 +481,21 @@ try {
 	const retriedAfter = (await ok("POST", `/api/chats/${id}/attachments`, { form: uploadForm(entries) })).json().attachments;
 	assert.deepEqual(retriedAfter, prepared);
 	assert.deepEqual(durable(await chatJson(id)), snapshot, "upload retry after restart changed nothing");
-	checks.push("restart: identical record, attachments, usage and image bytes via trial headers; upload retry reused ids");
+	checks.push("restart: identical record, attachments, usage and image bytes via server headers; upload retry reused ids");
 
 	// What Tailscale Serve supplies; without x-forwarded-proto Next fills in http and the gate refuses.
-	const trialBrowser = await openBrowser(trialHeaders);
-	page = trialBrowser.page;
-	const denied = trialBrowser.denied;
+	const serverBrowser = await openBrowser(serverHeaders);
+	page = serverBrowser.page;
+	const denied = serverBrowser.denied;
 	const navigation = await page.goto(`${origin}/chat/${id}`, { waitUntil: "domcontentloaded", timeout: 240000 });
-	assert.equal(navigation.status(), 200, `trial page load: ${await navigation.text().catch(() => "")}`);
+	assert.equal(navigation.status(), 200, `server page load: ${await navigation.text().catch(() => "")}`);
 	await page.waitForSelector('[data-testid="saved-session-attachments"]', { timeout: 240000 });
 	evidence.browserPreviewAfterRestart = await savedImagesRender(page, id, imageIds);
 	const pageText = await page.evaluate(() => document.body.innerText);
 	for (const needle of ["notes.txt", "paper.pdf", "board.png", "picked.png", "picked.md", "LH-TEACH-REPLY-1", "LH-TEACH-REPLY-2"]) assert.ok(pageText.includes(needle), `restarted page shows ${needle}`);
-	evidence.browserTrialDenied = denied;
+	evidence.browserServerDenied = denied;
 	await closeBrowser();
-	checks.push("restart: Chromium (synthetic trial identity) rendered saved names, replies and every image preview from the real route");
+	checks.push("restart: Chromium (synthetic tailnet identity) rendered saved names, replies and every image preview from the real route");
 
 	assert.equal(calls.length, callsBeforeRestart, "no model call after restart (reads, retry, browser)");
 	assert.deepEqual(unexpected, [], "no unexpected provider requests");
@@ -503,7 +503,7 @@ try {
 	assert.deepEqual(errors, [], "no page errors");
 	evidence.calls = calls.map(c => ({ kind: c.kind, page: c.page, tools: c.tools.length, images: c.images.length }));
 	fs.writeFileSync(evidenceFile, JSON.stringify(evidence, null, 2));
-	console.log(JSON.stringify({ result: "pass", checks, modelCalls: evidence.calls, trialDeniedInBrowser: denied, evidence: evidenceFile }, null, 2));
+	console.log(JSON.stringify({ result: "pass", checks, modelCalls: evidence.calls, serverDeniedInBrowser: denied, evidence: evidenceFile }, null, 2));
 } catch (err) {
 	console.error(err);
 	evidence.failure = String(err?.stack ?? err);

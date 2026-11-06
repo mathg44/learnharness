@@ -27,7 +27,7 @@ import { activeProblemOf } from "../../core/native-messages.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
 import { concludeResult, invalidInputResult, problemResult } from "../tool-execute.ts";
 import { healEncodedArguments, healToolRecord } from "./heal.ts";
-import { filterServerTrialTools } from "../../core/server-trial.ts";
+import { filterServerTools } from "../../core/server-capabilities.ts";
 
 
 /** The record-reading context the gates need (the plan-tools idiom). */
@@ -236,10 +236,10 @@ export function practiceTools(ctx: PracticeToolContext): Record<string, AgentToo
 	// the standard argument heal over the WHOLE registry. problem/conclude
 	// keep their own (target-normalizing) prepareArguments as the composed
 	// inner pass; the double heal is idempotent by construction.
-	// THE SERVER-TRIAL GATE, registry layer (core/server-trial.ts): applied
-	// last, dropping read/ls/find/grep and research/pdf unconditionally — a
-	// no-op when LH_SERVER_TRIAL is unset.
-	return filterServerTrialTools(
+	// THE SERVER CAPABILITY GATE, registry layer (core/server-capabilities.ts):
+	// applied last, dropping every tool whose server capability is not ready —
+	// a no-op when LH_SERVER_MODE is unset.
+	return filterServerTools(
 		healToolRecord({
 			problem: problemTool(gate, ctx.graphNodes),
 			conclude: concludeTool(gate),

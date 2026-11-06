@@ -26,7 +26,7 @@ import * as path from "node:path";
 import type { ModelRole } from "../../../config.ts";
 import { ROLE_SLOT, modelsNotConfigured, type ModelSlotName, type ProviderKeyMissing } from "../../core/settings.ts";
 import type { ChatStore, JobStore } from "../../core/ports.ts";
-import { serverTrialJobBlockReason } from "../../core/server-trial.ts";
+import { serverJobBlockReason } from "../../core/server-capabilities.ts";
 import { runDemoBuilder } from "./demo-builder.ts";
 import { runPdfReaderAgent } from "./pdf-reader.ts";
 import { runResearcherAgent } from "./researcher.ts";
@@ -242,9 +242,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			await finishJob(jobId, failure);
 		};
 		// Recovery must not restart disabled workers or even resolve their providers.
-		const trialBlock = serverTrialJobBlockReason(job.kind);
-		if (trialBlock) {
-			await refuse(trialBlock);
+		const serverBlock = serverJobBlockReason(job.kind);
+		if (serverBlock) {
+			await refuse(serverBlock);
 			return;
 		}
 		const engine = pickEngine(job.kind);

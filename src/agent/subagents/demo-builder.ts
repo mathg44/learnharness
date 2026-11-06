@@ -7,7 +7,7 @@ import { runSubagent } from "./pi-run.ts";
 import type { DemoResult } from "../../core/contracts.ts";
 import { getHeadless, type DemoRunResult, type HeadlessApi } from "./headless.ts";
 import { healToolRecord } from "../tools/heal.ts";
-import { isServerTrialEnabled } from "../../core/server-trial.ts";
+import { serverJobBlockReason } from "../../core/server-capabilities.ts";
 
 /**
  * The demo-builder sub-agent (vision §2 interactive demos + §2.5 "sub-agents
@@ -188,12 +188,13 @@ export async function runDemoBuilder(input: DemoBuilderInput, opts: DemoBuilderO
 	const brief = input.brief.trim() || "(no brief)";
 	const notes = (text: string) => (text.trim() ? text.trim() : undefined);
 
-	// THE SERVER-TRIAL GATE, direct-entrypoint layer (core/server-trial.ts):
+	// THE SERVER CAPABILITY GATE, direct-entrypoint layer (core/server-capabilities.ts):
 	// the runner already refuses "demo" jobs before this is ever called —
 	// this guard covers any other caller, so the headless browser never
-	// starts under the trial no matter the call path.
-	if (isServerTrialEnabled()) {
-		return { title, html: "", tested: true, notes: "FAILED: demo building is disabled in this server trial (LH_SERVER_TRIAL=1)" };
+	// starts while the capability is unavailable, whatever the call path.
+	const serverBlock = serverJobBlockReason("demo");
+	if (serverBlock) {
+		return { title, html: "", tested: true, notes: `FAILED: ${serverBlock}` };
 	}
 
 	const reason = headless.unavailableReason();

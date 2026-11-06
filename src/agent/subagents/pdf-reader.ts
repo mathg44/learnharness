@@ -10,7 +10,7 @@ import { backgroundCaptureStream, createBackgroundCapture, type BackgroundCaptur
 import type { PdfResult, PdfToolInput } from "../../core/contracts.ts";
 import { getHeadless, type HeadlessApi } from "./headless.ts";
 import { pdfExtract, pdfInfo, pdfProbe, pdfSearch, type PdfSearchHit } from "./pdf-ops.ts";
-import { isServerTrialEnabled } from "../../core/server-trial.ts";
+import { serverJobBlockReason } from "../../core/server-capabilities.ts";
 
 /**
  * The pdf-reader sub-agent (sources v0, 2026-09): reads a learner-provided
@@ -170,11 +170,12 @@ export async function runPdfReaderAgent(
 ): Promise<PdfResult> {
 	const maxIterations = opts.maxIterations ?? MAX_ITERATIONS;
 	// Refuse before path resolution, which now checks filesystem access.
-	if (isServerTrialEnabled()) {
+	const serverBlock = serverJobBlockReason("pdf");
+	if (serverBlock) {
 		return {
 			path: input.path,
 			question: input.question,
-			brief: "PDF failed: PDF reading is disabled in this server trial (LH_SERVER_TRIAL=1)",
+			brief: `PDF failed: ${serverBlock}`,
 			pagesRead: [],
 			pagesConsulted: [],
 		};
