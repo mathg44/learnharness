@@ -3,9 +3,10 @@ import { get } from "node:http";
 /** Local liveness probe. The container is a trusted local administrator. */
 try {
 	const headers = {};
-	if (process.env.LH_SERVER_TRIAL === "1") {
-		headers.host = new URL(process.env.LH_SERVER_TRIAL_ORIGIN).host;
-		headers["tailscale-user-login"] = process.env.LH_SERVER_TRIAL_OWNER;
+	if (process.env.LH_SERVER_MODE === "tailscale") {
+		headers.host = new URL(process.env.LH_SERVER_ORIGIN).host;
+		// Any non-empty login passes; this value only labels the probe.
+		headers["tailscale-user-login"] = "container-healthcheck";
 		headers["x-forwarded-proto"] = "https";
 	}
 	// Node fetch does not preserve an overridden Host. Use HTTP directly.

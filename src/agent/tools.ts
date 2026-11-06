@@ -13,7 +13,7 @@ import {
 	quizInputProblems,
 } from "../core/question-core.ts";
 import { filterEnabledTools, type EnabledTools } from "../core/pending.ts";
-import { filterServerTrialTools } from "../core/server-trial.ts";
+import { filterServerTools } from "../core/server-capabilities.ts";
 import type { JobRecord } from "../core/contracts.ts";
 import type { JobStore } from "../core/ports.ts";
 import { jobTools, type DemoInput, type PdfInput, type ResearchInput, type VisualInput } from "./tools/jobs.ts";
@@ -316,12 +316,12 @@ export function createProberTools(
 	// healToolRecord (owner, 2026-10-09 — the whitehead generalization):
 	// the standard argument heal over the WHOLE registry — every tool,
 	// not just the one the latest wobble incident landed on.
-	// THE SERVER-TRIAL GATE, registry layer (core/server-trial.ts): applied
-	// LAST, after the user-settings filter — it drops read/ls/find/grep and
-	// the research/pdf dispatch tools unconditionally, so no settings delta
-	// (filterEnabledTools only ever narrows, never widens) can bring one
-	// back. A no-op when LH_SERVER_TRIAL is unset.
-	return filterServerTrialTools(
+	// THE SERVER CAPABILITY GATE, registry layer (core/server-capabilities.ts):
+	// applied LAST, after the user-settings filter — it drops every tool whose
+	// server capability is not ready, so no settings delta (filterEnabledTools
+	// only ever narrows, never widens) can bring one back. A no-op when
+	// LH_SERVER_MODE is unset.
+	return filterServerTools(
 		healToolRecord({
 			...filterEnabledTools(
 				{
@@ -453,14 +453,14 @@ export function createTeacherTools(
 	const quizzing: Record<string, AgentTool<any>> =
 		mechanics === "free" ? { explain: teachExplainToolFor(ctx) } : { quiz: teachQuizToolFor(ctx) };
 	// healToolRecord — same standard as the prober's registry (above).
-	// Apply the trial restrictions last so settings cannot restore blocked tools.
-	return filterServerTrialTools(
+	// Apply the server capability gate last so settings cannot restore unavailable tools.
+	return filterServerTools(
 		healToolRecord(
 			filterEnabledTools(
 				{
 					...quizzing,
 					ask_user_question: askUserQuestionTool,
-					// Read-only learner-file tools remain available outside trial mode.
+					// Read-only learner-file tools remain available outside server mode.
 					read: readTool,
 					ls: lsTool,
 					find: findTool,

@@ -3,7 +3,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute } from "../tool-execute.ts";
 import type { JobRecord } from "../../core/contracts.ts";
 import type { JobStore } from "../../core/ports.ts";
-import { serverTrialJobBlockReason } from "../../core/server-trial.ts";
+import { serverJobBlockReason } from "../../core/server-capabilities.ts";
 import { checkLearnerImage } from "./learner-image.ts";
 import { resolveSourcePath } from "./fs-shared.ts";
 
@@ -88,12 +88,12 @@ function dispatch(
 	ack: string,
 	input: ResearchInput | DemoInput | VisualInput | PdfInput,
 ): string {
-	// THE SERVER-TRIAL GATE, second layer (core/server-trial.ts): the tool's
+	// THE SERVER CAPABILITY GATE, second layer (core/server-capabilities.ts): the tool's
 	// own serverExecute already refuses by name before `run` (this function)
 	// is ever called — this check guards dispatch() itself against any
 	// other call path (a future wiring that reuses it directly), so a job
-	// record is never created for a disabled kind no matter how it's reached.
-	const blocked = serverTrialJobBlockReason(kind);
+	// record is never created for an unavailable kind no matter how it's reached.
+	const blocked = serverJobBlockReason(kind);
 	if (blocked) return blocked;
 	const existing = ctx.jobStore.findJobByToolCallId(ctx.chatId, toolCallId);
 	const job = existing ?? ctx.jobStore.createJob({ kind, chatId: ctx.chatId, toolCallId, input });

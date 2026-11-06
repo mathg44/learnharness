@@ -74,7 +74,7 @@ npm test           # fixtures and fake providers
 
 See the [documentation index](docs/README.md) for all guides, [development](docs/development.md) for setup and checks, [architecture](docs/architecture.md) for the runtime, [keyboard shortcuts](docs/keyboard.md), and [desktop builds and releases](docs/desktop-release.md).
 
-The fork's [private trial guide](docs/private-trial.md) covers the reduced owner-only Tailscale deployment. Its [production container guide](docs/production-container.md) covers base Docker packaging and isolated persistence checks.
+The fork's [private server guide](docs/private-server.md) covers the personal Tailscale installation and its migration from the earlier trial. Its [production container guide](docs/production-container.md) covers base Docker packaging and isolated persistence checks.
 
 Questions, bug reports, and feature requests: [GitHub Issues](https://github.com/amosblomqvist/learnharness/issues).
 

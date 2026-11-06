@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Static, TSchema } from "typebox";
 import { CONCLUDE_ACK_TEXT } from "../core/contracts/chat.ts";
-import { serverTrialToolBlockReason } from "../core/server-trial.ts";
+import { serverToolBlockReason } from "../core/server-capabilities.ts";
 
 /**
  * tool-execute — the execution machinery every server-side lh tool shares,
@@ -187,7 +187,7 @@ export interface ToolExecuteContext {
 	signal?: AbortSignal;
 }
 
-/** The server-trial refusal shape (tool-disabled, not invalid-input): a
+/** The server-capability refusal shape (tool-disabled, not invalid-input): a
  *  stale client, a restored tool call, or a registry that forgot to filter
  *  all land here the same way — isError so the model sees a failed call,
  *  `details` carries the reason for the record/UI. */
@@ -206,11 +206,11 @@ export function toolDisabledResult(toolName: string, reason: string): AgentToolR
  * this: their placeholder is instant (questionResult below) and their
  * refinement checks run before it.
  *
- * THE SERVER-TRIAL GATE (core/server-trial.ts): checked first, before `run`
- * ever executes — the trial's low-level tool-execution boundary. A tool
- * named in SERVER_TRIAL_BLOCKED_TOOLS refuses here even if some future
+ * THE SERVER CAPABILITY GATE (core/server-capabilities.ts): checked first,
+ * before `run` ever executes — the low-level tool-execution boundary. A tool
+ * whose server capability is not ready refuses here even if some future
  * registry forgets to filter it out, or a client replays a stale/restored
- * call for it. A no-op when LH_SERVER_TRIAL is unset.
+ * call for it. A no-op when LH_SERVER_MODE is unset.
  */
 export function serverExecute<P extends TSchema>(
 	toolName: string,
@@ -225,7 +225,7 @@ export function serverExecute<P extends TSchema>(
 	// precise Static<P> input; `schema` exists in the signature precisely so
 	// P infers from the call site, not the loose surface.
 	return async (toolCallId, input: unknown, signal) => {
-		const blocked = serverTrialToolBlockReason(toolName);
+		const blocked = serverToolBlockReason(toolName);
 		if (blocked) return toolDisabledResult(toolName, blocked);
 		return toToolResult(
 			await runWithAbortGuard(toolName, (toolSignal) => run(input as Static<P>, { toolCallId, signal: toolSignal }), signal),

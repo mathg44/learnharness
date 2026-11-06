@@ -1,15 +1,16 @@
 /**
- * The server trial profile (core/server-trial.ts, LH_SERVER_TRIAL=1):
- * proves the hard restrictions at every gated layer —
+ * Server capability readiness (core/server-capabilities.ts, LH_SERVER_MODE):
+ * while every capability is unready, proves the restrictions at every gated
+ * layer —
  *
- *   1. core/server-trial.ts — the pure policy functions
+ *   1. core/server-capabilities.ts — the pure policy functions
  *   2. serverExecute (agent/tool-execute.ts) — the low-level tool-execution
  *      boundary: read/ls/find/grep and the research/demo/visual/pdf job
  *      tools refuse explicitly, without running their body
- *   3. job dispatch (agent/tools/jobs.ts) — a blocked kind never creates a
- *      job record or spawns the runner
- *   4. the job runner (agent/subagents/runner.ts) — a job of a blocked kind
- *      (including one that looks "restored": created directly in the
+ *   3. job dispatch (agent/tools/jobs.ts) — an unavailable kind never creates
+ *      a job record or spawns the runner
+ *   4. the job runner (agent/subagents/runner.ts) — a job of an unavailable
+ *      kind (including one that looks "restored": created directly in the
  *      store, never dispatched this run) refuses before any model engine
  *      is ever picked
  *   5. the sub-agent worker entrypoints (researcher/demo-builder/
@@ -18,12 +19,13 @@
  *      or the filesystem
  *   6. the tool registries (agent/tools.ts createProberTools/
  *      createTeacherTools, agent/tools/practice.ts practiceTools) — drop
- *      the blocked tools from what the model is even told exists, and
+ *      the unavailable tools from what the model is even told exists, and
  *      prove user/session settings (EnabledTools) cannot bring them back
  *
- * Every describe block also proves the symmetric case: with
- * LH_SERVER_TRIAL unset, behavior is byte-identical to before this policy
- * existed (core prober/teacher/practice tool sets, question tools, plan
+ * Server mode is any defined LH_SERVER_MODE, so an invalid value that the
+ * access gate refuses still restricts capabilities. Every describe block
+ * also proves the symmetric case: with LH_SERVER_MODE unset, behavior is
+ * unchanged (core prober/teacher/practice tool sets, question tools, plan
  * tools, and the fs/job tools all present and functional).
  */
 import assert from "node:assert/strict";
@@ -38,7 +40,7 @@ import type { JobRecord, PdfResult, DemoResult, VisualResult, ResearchResult } f
 import type { PiEngine } from "../src/agent/models.ts";
 
 // Match file-access.test.ts: isolate the profile before config or stores load.
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), "lh-server-trial-tools-"));
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), "lh-server-capabilities-"));
 const priorEnv = Object.fromEntries(["HOME", "USERPROFILE", "LH_DATA_DIR", "LH_AUTH_FILE"].map((key) => [key, process.env[key]]));
 const home = path.join(profile, "home");
 const auth = path.join(profile, "auth.json");
@@ -56,7 +58,7 @@ after(() => {
 	}
 });
 
-const { filterServerTrialTools, isServerTrialEnabled, serverTrialJobBlockReason, serverTrialToolBlockReason } = await import("../src/core/server-trial.ts");
+const { SERVER_CAPABILITIES, filterServerTools, isServerMode, serverJobBlockReason, serverToolBlockReason } = await import("../src/core/server-capabilities.ts");
 const { readTool } = await import("../src/agent/tools/read.ts");
 const { lsTool } = await import("../src/agent/tools/ls.ts");
 const { findTool } = await import("../src/agent/tools/find.ts");
@@ -78,16 +80,17 @@ const { PATHS } = await import("../config.ts");
 
 const BLOCKED_TOOLS = ["read", "ls", "find", "grep", "show_image", "research", "demo", "visual", "pdf"] as const;
 
-/** Toggle the env flag for exactly the scope of one callback, always restoring. */
-async function withTrial<T>(on: boolean, fn: () => Promise<T> | T): Promise<T> {
-	const prior = process.env.LH_SERVER_TRIAL;
-	if (on) process.env.LH_SERVER_TRIAL = "1";
-	else delete process.env.LH_SERVER_TRIAL;
+/** Set LH_SERVER_MODE for exactly the scope of one callback, always restoring.
+ * `true` is the real deployment value; a string tests other values. */
+async function withServer<T>(mode: boolean | string, fn: () => Promise<T> | T): Promise<T> {
+	const prior = process.env.LH_SERVER_MODE;
+	if (mode === false) delete process.env.LH_SERVER_MODE;
+	else process.env.LH_SERVER_MODE = mode === true ? "tailscale" : mode;
 	try {
 		return await fn();
 	} finally {
-		if (prior === undefined) delete process.env.LH_SERVER_TRIAL;
-		else process.env.LH_SERVER_TRIAL = prior;
+		if (prior === undefined) delete process.env.LH_SERVER_MODE;
+		else process.env.LH_SERVER_MODE = prior;
 	}
 }
 
@@ -142,45 +145,56 @@ function trackJob(id: string): string {
 
 // ─── 1. the pure policy module ───────────────────────────────────────────────
 
-describe("core/server-trial.ts — pure policy", () => {
-	it("isServerTrialEnabled reads LH_SERVER_TRIAL=1 exactly, nothing else", async () => {
-		await withTrial(false, () => assert.equal(isServerTrialEnabled(), false));
-		await withTrial(true, () => assert.equal(isServerTrialEnabled(), true));
-		const prior = process.env.LH_SERVER_TRIAL;
-		try {
-			process.env.LH_SERVER_TRIAL = "true"; // not the literal "1" — stays off
-			assert.equal(isServerTrialEnabled(), false);
-		} finally {
-			if (prior === undefined) delete process.env.LH_SERVER_TRIAL;
-			else process.env.LH_SERVER_TRIAL = prior;
+describe("core/server-capabilities.ts — pure policy", () => {
+	it("isServerMode is true for any defined LH_SERVER_MODE, including empty or invalid values", () => {
+		assert.equal(isServerMode({}), false);
+		for (const value of ["tailscale", "", "off", "0", "TAILSCALE"]) assert.equal(isServerMode({ LH_SERVER_MODE: value }), true, JSON.stringify(value));
+	});
+
+	it("every capability is unready until its restoration issue lands", () => {
+		for (const [name, definition] of Object.entries(SERVER_CAPABILITIES)) assert.equal(definition.ready(), false, name);
+	});
+
+	it("serverToolBlockReason / serverJobBlockReason: null outside server mode, a reason in it, only for capability-owned names", async () => {
+		await withServer(false, () => {
+			for (const name of BLOCKED_TOOLS) assert.equal(serverToolBlockReason(name), null);
+			assert.equal(serverJobBlockReason("research"), null);
+		});
+		for (const mode of [true, "", "unknown-mode"]) {
+			await withServer(mode, () => {
+				for (const name of BLOCKED_TOOLS) {
+					const reason = serverToolBlockReason(name);
+					assert.ok(reason && reason.includes("not available on this server"), `${name} should be blocked in mode ${JSON.stringify(mode)}`);
+				}
+				assert.equal(serverToolBlockReason("quiz"), null, "an unrelated tool is never touched");
+				assert.equal(serverToolBlockReason("plan_init"), null);
+				for (const kind of ["research", "demo", "visual", "pdf"]) {
+					assert.ok(serverJobBlockReason(kind)?.includes("not available on this server"));
+				}
+			});
 		}
 	});
 
-	it("serverTrialToolBlockReason / serverTrialJobBlockReason: null off, a reason on, only for the blocked names", async () => {
-		await withTrial(false, () => {
-			for (const name of BLOCKED_TOOLS) assert.equal(serverTrialToolBlockReason(name), null);
-			assert.equal(serverTrialJobBlockReason("research"), null);
+	it("filterServerTools: drops unready tools in server mode, identity otherwise", async () => {
+		const tools = { read: readTool, ls: lsTool, quiz: readTool /* stand-in */, probe_done: readTool };
+		await withServer(false, () => {
+			assert.deepEqual(Object.keys(filterServerTools(tools)).sort(), Object.keys(tools).sort());
 		});
-		await withTrial(true, () => {
-			for (const name of BLOCKED_TOOLS) {
-				const reason = serverTrialToolBlockReason(name);
-				assert.ok(reason && reason.includes("server trial"), `${name} should be blocked`);
-			}
-			assert.equal(serverTrialToolBlockReason("quiz"), null, "an unrelated tool is never touched");
-			assert.equal(serverTrialToolBlockReason("plan_init"), null);
-			for (const kind of ["research", "demo", "visual", "pdf"]) {
-				assert.ok(serverTrialJobBlockReason(kind)?.includes("server trial"));
-			}
+		await withServer(true, () => {
+			assert.deepEqual(Object.keys(filterServerTools(tools)).sort(), ["probe_done", "quiz"]);
 		});
 	});
 
-	it("filterServerTrialTools: unconditional drop under trial, identity otherwise", async () => {
-		const tools = { read: readTool, ls: lsTool, quiz: readTool /* stand-in */, probe_done: readTool };
-		await withTrial(false, () => {
-			assert.deepEqual(Object.keys(filterServerTrialTools(tools)).sort(), Object.keys(tools).sort());
-		});
-		await withTrial(true, () => {
-			assert.deepEqual(Object.keys(filterServerTrialTools(tools)).sort(), ["probe_done", "quiz"]);
+	it("a ready capability is restored at every layer while the others stay blocked", async (t) => {
+		t.mock.method(SERVER_CAPABILITIES.research, "ready", () => true);
+		await withServer(true, () => {
+			assert.equal(serverToolBlockReason("research"), null);
+			assert.equal(serverToolBlockReason("web_search"), null);
+			assert.equal(serverJobBlockReason("research"), null);
+			assert.ok(serverToolBlockReason("web_fetch_pdf"), "remote PDF download belongs to the pdf capability");
+			assert.ok(serverJobBlockReason("pdf"));
+			const kept = filterServerTools({ research: 1, web_fetch: 1, web_fetch_pdf: 1, pdf_info: 1, read: 1 });
+			assert.deepEqual(Object.keys(kept).sort(), ["research", "web_fetch"]);
 		});
 	});
 });
@@ -188,34 +202,34 @@ describe("core/server-trial.ts — pure policy", () => {
 // ─── 2. serverExecute — the low-level tool-execution boundary ───────────────
 
 describe("serverExecute gate: the learner-fs tools", () => {
-	const SELF = path.join(import.meta.dirname, "server-trial-tools.test.ts");
+	const SELF = path.join(import.meta.dirname, "server-capabilities.test.ts");
 
-	it("read/ls/find/grep refuse explicitly under the trial, without touching disk", async () => {
-		await withTrial(true, async () => {
+	it("read/ls/find/grep refuse explicitly in server mode, without touching disk", async () => {
+		await withServer(true, async () => {
 			for (const [tool, params] of [
 				[readTool, { path: SELF }],
 				[lsTool, { path: import.meta.dirname }],
 				[findTool, { pattern: "*.ts", path: import.meta.dirname }],
-				[grepTool, { pattern: "server trial", path: import.meta.dirname }],
+				[grepTool, { pattern: "not available", path: import.meta.dirname }],
 			] as const) {
 				const result = await run(tool, params);
 				assert.equal(result.isError, true, `${tool.name} should refuse`);
 				const text = (result.content[0] as { text: string }).text;
-				assert.match(text, /server trial/);
+				assert.match(text, /not available on this server/);
 				assert.equal((result.details as { tool: string }).tool, tool.name);
 			}
 		});
 	});
 
-	it("read/ls/find/grep work normally when the trial is off (unchanged)", async () => {
-		await withTrial(false, async () => {
+	it("read/ls/find/grep work normally outside server mode (unchanged)", async () => {
+		await withServer(false, async () => {
 			const readResult = await run(readTool, { path: SELF });
 			assert.notEqual(readResult.isError, true);
 			assert.match((readResult.content[0] as { text: string }).text, /learner-fs tools/);
 
 			const lsResult = await run(lsTool, { path: import.meta.dirname });
 			assert.notEqual(lsResult.isError, true);
-			assert.match((lsResult.content[0] as { text: string }).text, /server-trial-tools\.test\.ts/);
+			assert.match((lsResult.content[0] as { text: string }).text, /server-capabilities\.test\.ts/);
 		});
 	});
 });
@@ -226,9 +240,9 @@ describe("serverExecute gate: the job-dispatch tools", () => {
 		return { calls, spawn: (job: JobRecord) => void calls.push(job) };
 	}
 
-	it("research/demo/visual/pdf refuse explicitly under the trial — no job created, nothing spawned", async () => {
-		await withTrial(true, async () => {
-			const chatId = trackChat(chatStore.createChat("Trial test: dispatch blocked").id);
+	it("research/demo/visual/pdf refuse explicitly in server mode — no job created, nothing spawned", async () => {
+		await withServer(true, async () => {
+			const chatId = trackChat(chatStore.createChat("Server test: dispatch blocked").id);
 			const { calls, spawn } = spawnSpy();
 			const tools = jobTools({ chatId, jobStore, spawn });
 
@@ -241,16 +255,16 @@ describe("serverExecute gate: the job-dispatch tools", () => {
 			for (const [name, params] of cases) {
 				const result = await run(tools[name]!, params);
 				assert.equal(result.isError, true, `${name} should refuse`);
-				assert.match((result.content[0] as { text: string }).text, /server trial/);
+				assert.match((result.content[0] as { text: string }).text, /not available on this server/);
 			}
 			assert.equal(calls.length, 0, "nothing was ever spawned");
 			assert.equal(jobStore.listJobs(chatId).length, 0, "no job record was created");
 		});
 	});
 
-	it("research dispatch works normally when the trial is off (unchanged)", async () => {
-		await withTrial(false, async () => {
-			const chatId = trackChat(chatStore.createChat("Trial test: dispatch unblocked").id);
+	it("research dispatch works normally outside server mode (unchanged)", async () => {
+		await withServer(false, async () => {
+			const chatId = trackChat(chatStore.createChat("Server test: dispatch unblocked").id);
 			const { calls, spawn } = spawnSpy();
 			const tools = jobTools({ chatId, jobStore, spawn });
 
@@ -267,7 +281,7 @@ describe("serverExecute gate: the job-dispatch tools", () => {
 
 describe("direct web and PDF tool execution", () => {
 	it("refuses before network or filesystem access, even outside a worker registry", async () => {
-		await withTrial(true, async () => {
+		await withServer(true, async () => {
 			const tools = { ...createWebTools(() => { throw new Error("search must not resolve"); }), ...createPdfReadTools("/does/not/exist") };
 			for (const [name, params] of [
 				["web_search", { query: "q" }],
@@ -279,7 +293,7 @@ describe("direct web and PDF tool execution", () => {
 			] as const) {
 				const result = await run(tools[name]!, params);
 				assert.equal(result.isError, true);
-				assert.match((result.content[0] as { text: string }).text, /server trial/);
+				assert.match((result.content[0] as { text: string }).text, /not available on this server/);
 			}
 		});
 	});
@@ -289,35 +303,35 @@ describe("direct web and PDF tool execution", () => {
 
 describe("the job runner: blocked kinds refuse before any engine is picked", () => {
 	for (const kind of ["research", "demo", "visual", "pdf"] as const) {
-		it(`a ${kind} job refuses under the trial even with NO test engine override (never reaches model selection)`, async () => {
-			await withTrial(true, async () => {
-				const chat = chatStore.createChat(`Trial test: runner blocked ${kind}`);
+		it(`a ${kind} job refuses in server mode even with NO test engine override (never reaches model selection)`, async () => {
+			await withServer(true, async () => {
+				const chat = chatStore.createChat(`Server test: runner blocked ${kind}`);
 				trackChat(chat.id);
 				const job = jobStore.createJob({ kind, chatId: chat.id, toolCallId: `call-${kind}` });
 				trackJob(job.id);
 
 				const steers: unknown[] = [];
 				const runner = createJobRunner({ chatStore, jobStore, deliver: async (s) => void steers.push(s), engineFor: () => { throw new Error("provider must not resolve"); } });
-				// No *ModelOverride set for this kind — if the trial gate did not
+				// No *ModelOverride set for this kind — if the capability gate did not
 				// fire first, pickEngine would come up empty and the job would
 				// refuse with a DIFFERENT ("models not configured") message.
 				await runner.runJob(job.id, kind === "pdf" ? { path: "/tmp/x.pdf", question: "q" } : ({ question: "q", title: "t", brief: "b" } as never));
 
 				const done = jobStore.getJob(job.id)!;
 				assert.equal(done.status, "error");
-				assert.match(done.error ?? "", /server trial/, "the trial gate fired, not the missing-model refusal");
+				assert.match(done.error ?? "", /not available on this server/, "the capability gate fired, not the missing-model refusal");
 				assert.equal(steers.length, 1, "the teacher still learns the outcome via a steer");
 			});
 		});
 
 		it(`a "restored" ${kind} job (created before the flag flipped, never dispatched this run) still refuses explicitly`, async () => {
-			await withTrial(true, async () => {
-				const chat = chatStore.createChat(`Trial test: restored ${kind}`);
+			await withServer(true, async () => {
+				const chat = chatStore.createChat(`Server test: restored ${kind}`);
 				trackChat(chat.id);
 				// No dispatch-time input and no transcript tool call — exactly the
 				// shape of a job recovered from the store with nothing else to go
 				// on (resolveInput falls through to undefined, same as a crash
-				// recovery re-spawn of a job that predates this trial).
+				// recovery re-spawn of a job that predates server mode).
 				const job = jobStore.createJob({ kind, chatId: chat.id, toolCallId: `call-restored-${kind}` });
 				trackJob(job.id);
 				const runner = createJobRunner({ chatStore, jobStore, deliver: async () => {} });
@@ -326,16 +340,16 @@ describe("the job runner: blocked kinds refuse before any engine is picked", () 
 
 				const done = jobStore.getJob(job.id)!;
 				assert.equal(done.status, "error");
-				assert.match(done.error ?? "", /server trial/);
+				assert.match(done.error ?? "", /not available on this server/);
 			});
 		});
 	}
 
-	it("non-trial: a research job runs to completion as before (unchanged)", async () => {
-		await withTrial(false, async () => {
-			const chat = chatStore.createChat("Trial test: runner non-trial research");
+	it("non-server: a research job runs to completion as before (unchanged)", async () => {
+		await withServer(false, async () => {
+			const chat = chatStore.createChat("Server test: runner non-server research");
 			trackChat(chat.id);
-			const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-non-trial" });
+			const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-non-server" });
 			trackJob(job.id);
 
 			const faux = createFauxCore({});
@@ -347,7 +361,7 @@ describe("the job runner: blocked kinds refuse before any engine is picked", () 
 
 			const done = jobStore.getJob(job.id)!;
 			assert.equal(done.status, "done");
-			assert.doesNotMatch(done.error ?? "", /server trial/);
+			assert.doesNotMatch(done.error ?? "", /not available on this server/);
 			assert.match((done.result as ResearchResult).brief, /fine/);
 		});
 	});
@@ -355,35 +369,35 @@ describe("the job runner: blocked kinds refuse before any engine is picked", () 
 
 // ─── 5. direct worker entrypoints ────────────────────────────────────────────
 
-describe("sub-agent worker entrypoints refuse directly under the trial", () => {
+describe("sub-agent worker entrypoints refuse directly in server mode", () => {
 	it("runResearcherAgent throws before touching web_search/web_fetch", async () => {
-		await withTrial(true, async () => {
-			await assert.rejects(() => runResearcherAgent("anything"), /server trial/);
+		await withServer(true, async () => {
+			await assert.rejects(() => runResearcherAgent("anything"), /not available on this server/);
 		});
 	});
 
 	it("runDemoBuilder returns the FAILED shape before the headless browser starts", async () => {
-		await withTrial(true, async () => {
+		await withServer(true, async () => {
 			const result: DemoResult = await runDemoBuilder({ title: "t", brief: "b" });
 			assert.equal(result.html, "");
 			assert.equal(result.tested, true);
-			assert.match(result.notes ?? "", /server trial/);
+			assert.match(result.notes ?? "", /not available on this server/);
 		});
 	});
 
 	it("runVisualMaker returns the FAILED shape before any render happens", async () => {
-		await withTrial(true, async () => {
+		await withServer(true, async () => {
 			const result: VisualResult = await runVisualMaker({ brief: "b" });
 			assert.equal(result.svg, "");
-			assert.match(result.notes ?? "", /server trial/);
+			assert.match(result.notes ?? "", /not available on this server/);
 		});
 	});
 
 	it("runPdfReaderAgent refuses before even stat-ing the path (local or a web-fetched temp file alike)", async () => {
-		await withTrial(true, async () => {
+		await withServer(true, async () => {
 			const result: PdfResult = await runPdfReaderAgent({ path: "/definitely/does/not/exist.pdf", question: "q?" });
 			assert.match(result.brief, /^PDF failed:/);
-			assert.match(result.brief, /server trial/);
+			assert.match(result.brief, /not available on this server/);
 			assert.deepEqual(result.pagesRead, []);
 			assert.deepEqual(result.pagesConsulted, []);
 		});
@@ -400,62 +414,62 @@ describe("tool registries drop the blocked tools, and settings cannot bring them
 		return { chatId, chatStore, jobStore, spawn: () => {}, deliver: () => {} };
 	}
 
-	it("createTeacherTools: under the trial, the fs + job-dispatch tools are gone; the core set remains", async () => {
-		await withTrial(true, async () => {
-			const chatId = trackChat(chatStore.createChat("Trial test: teacher registry trial").id);
+	it("createTeacherTools: in server mode, the fs + job-dispatch tools are gone; the core set remains", async () => {
+		await withServer(true, async () => {
+			const chatId = trackChat(chatStore.createChat("Server test: teacher registry server").id);
 			// enabled=undefined means "everything the user can toggle stays
-			// enabled" — the point is that EVEN SO, the trial floor holds.
+			// enabled" — the point is that EVEN SO, the server floor holds.
 			const keys = Object.keys(createTeacherTools(teacherCtx(chatId), undefined));
 			for (const b of BLOCKED_TOOLS) assert.ok(!keys.includes(b), `${b} must be absent`);
 			for (const must of ["quiz", "ask_user_question", "plan_init"]) assert.ok(keys.includes(must), `${must} must remain`);
 		});
 	});
 
-	it("show_image is unavailable in trial lessons and refuses direct execution", async () => {
-		await withTrial(true, async () => {
-			const chatId = trackChat(chatStore.createChat("Trial test: learner image blocked").id);
+	it("show_image is unavailable in server lessons and refuses direct execution", async () => {
+		await withServer(true, async () => {
+			const chatId = trackChat(chatStore.createChat("Server test: learner image blocked").id);
 			const directTool = createShowImageTool({ chatId, chatStore });
 			const result = await run(directTool, { path: "/definitely/does/not/exist.png" });
 			assert.equal(result.isError, true);
-			assert.match((result.content[0] as { text: string }).text, /server trial/);
+			assert.match((result.content[0] as { text: string }).text, /not available on this server/);
 			assert.equal((result.details as { tool: string }).tool, "show_image");
 			assert.equal(chatStore.getChat(chatId)!.imageSnapshots, undefined);
 			assert.ok(!("show_image" in createTeacherTools(teacherCtx(chatId), undefined)));
 		});
 	});
 
-	it("createTeacherTools: non-trial keeps the full set (unchanged)", async () => {
-		await withTrial(false, async () => {
-			const chatId = trackChat(chatStore.createChat("Trial test: teacher registry non-trial").id);
+	it("createTeacherTools: non-server keeps the full set (unchanged)", async () => {
+		await withServer(false, async () => {
+			const chatId = trackChat(chatStore.createChat("Server test: teacher registry non-server").id);
 			const keys = Object.keys(createTeacherTools(teacherCtx(chatId), undefined));
 			for (const must of [...BLOCKED_TOOLS, "quiz", "ask_user_question", "plan_init"]) {
-				assert.ok(keys.includes(must), `${must} should be present outside the trial`);
+				assert.ok(keys.includes(must), `${must} should be present outside server mode`);
 			}
 		});
 	});
 
-	it("createProberTools: under the trial, the fs + research/pdf tools are gone; probe_done always survives", async () => {
-		await withTrial(true, async () => {
-			const chatId = trackChat(chatStore.createChat("Trial test: prober registry trial").id);
+	it("createProberTools: in server mode, the fs + research/pdf tools are gone; probe_done always survives", async () => {
+		await withServer(true, async () => {
+			const chatId = trackChat(chatStore.createChat("Server test: prober registry server").id);
 			const keys = Object.keys(createProberTools(proberCtx(chatId), undefined));
 			for (const b of ["read", "ls", "find", "grep", "research", "pdf"]) assert.ok(!keys.includes(b));
 			for (const must of ["probe", "ask_user_question", "probe_done"]) assert.ok(keys.includes(must));
 		});
 	});
 
-	it("createProberTools: non-trial keeps the full set (unchanged)", async () => {
-		await withTrial(false, async () => {
-			const chatId = trackChat(chatStore.createChat("Trial test: prober registry non-trial").id);
+	it("createProberTools: non-server keeps the full set (unchanged)", async () => {
+		await withServer(false, async () => {
+			const chatId = trackChat(chatStore.createChat("Server test: prober registry non-server").id);
 			const keys = Object.keys(createProberTools(proberCtx(chatId), undefined));
 			for (const must of ["read", "ls", "find", "grep", "research", "pdf", "probe", "ask_user_question", "probe_done"]) {
-				assert.ok(keys.includes(must), `${must} should be present outside the trial`);
+				assert.ok(keys.includes(must), `${must} should be present outside server mode`);
 			}
 		});
 	});
 
-	it("practiceTools: under the trial, the fs + research/pdf tools are gone; problem/conclude remain", async () => {
-		await withTrial(true, async () => {
-			const chatId = trackChat(chatStore.createChat("Trial test: practice registry trial", "practice").id);
+	it("practiceTools: in server mode, the fs + research/pdf tools are gone; problem/conclude remain", async () => {
+		await withServer(true, async () => {
+			const chatId = trackChat(chatStore.createChat("Server test: practice registry server", "practice").id);
 			const keys = Object.keys(
 				practiceTools({ chatId, chatStore, jobs: { chatId, jobStore, spawn: () => {} } }),
 			);
@@ -464,14 +478,14 @@ describe("tool registries drop the blocked tools, and settings cannot bring them
 		});
 	});
 
-	it("practiceTools: non-trial keeps the full set (unchanged)", async () => {
-		await withTrial(false, async () => {
-			const chatId = trackChat(chatStore.createChat("Trial test: practice registry non-trial", "practice").id);
+	it("practiceTools: non-server keeps the full set (unchanged)", async () => {
+		await withServer(false, async () => {
+			const chatId = trackChat(chatStore.createChat("Server test: practice registry non-server", "practice").id);
 			const keys = Object.keys(
 				practiceTools({ chatId, chatStore, jobs: { chatId, jobStore, spawn: () => {} } }),
 			);
 			for (const must of ["read", "ls", "find", "grep", "research", "pdf", "problem", "conclude"]) {
-				assert.ok(keys.includes(must), `${must} should be present outside the trial`);
+				assert.ok(keys.includes(must), `${must} should be present outside server mode`);
 			}
 		});
 	});

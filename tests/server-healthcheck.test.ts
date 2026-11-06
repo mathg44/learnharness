@@ -2,23 +2,18 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { test } from "node:test";
-import { evaluateTrialAccess } from "../src/server/trial-access.ts";
+import { evaluateServerAccess } from "../src/server/server-access.ts";
 
-test("container healthcheck preserves the trial Host, identity and HTTPS forwarding headers", async () => {
-	const env = {
-		LH_SERVER_TRIAL: "1",
-		LH_SERVER_TRIAL_OWNER: "owner@example.com",
-		LH_SERVER_TRIAL_ORIGIN: "https://trial.example.ts.net",
-	};
+/** Run the real healthcheck against a stub that applies the real access gate. */
+async function runHealthcheck(env: Record<string, string>) {
 	let accepted = false;
 	const server = createServer((req, res) => {
 		const headers = new Headers();
 		for (const [key, value] of Object.entries(req.headers)) {
 			if (value !== undefined) headers.set(key, Array.isArray(value) ? value.join(", ") : value);
 		}
-		accepted = evaluateTrialAccess(req.method!, headers, env).allowed;
+		accepted = evaluateServerAccess(req.method!, headers, env).allowed;
 		assert.equal(req.url, "/api/settings");
-		assert.equal(headers.get("x-forwarded-proto"), "https");
 		res.writeHead(accepted ? 200 : 403, { "content-type": "application/json" });
 		res.end(JSON.stringify(accepted ? { settings: null } : { error: "denied" }));
 	});
@@ -32,9 +27,23 @@ test("container healthcheck preserves the trial Host, identity and HTTPS forward
 			child.on("error", reject);
 			child.on("exit", resolve);
 		});
-		assert.equal(exitCode, 0);
-		assert.equal(accepted, true);
+		return { exitCode, accepted };
 	} finally {
 		await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 	}
+}
+
+test("container healthcheck supplies the server Host, an identity and HTTPS forwarding in tailscale mode", async () => {
+	const result = await runHealthcheck({ LH_SERVER_MODE: "tailscale", LH_SERVER_ORIGIN: "https://server.example.ts.net" });
+	assert.deepEqual(result, { exitCode: 0, accepted: true });
+});
+
+test("container healthcheck reports unhealthy when server mode is misconfigured", async () => {
+	const result = await runHealthcheck({ LH_SERVER_MODE: "unknown", LH_SERVER_ORIGIN: "https://server.example.ts.net" });
+	assert.deepEqual(result, { exitCode: 1, accepted: false });
+});
+
+test("container healthcheck sends no server headers outside server mode", async () => {
+	const result = await runHealthcheck({});
+	assert.deepEqual(result, { exitCode: 0, accepted: true });
 });

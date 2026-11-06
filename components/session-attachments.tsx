@@ -53,7 +53,7 @@ export function sessionAttachmentUrl(chatId: string, attachmentId: string): stri
 /** Called from event handlers only, so server renders never draw ids. */
 function newAttachmentId(): string {
 	const cryptoApi = globalThis.crypto;
-	// randomUUID needs a secure context; plain-http trial hosts still have getRandomValues.
+	// randomUUID needs a secure context; plain-http hosts still have getRandomValues.
 	if (typeof cryptoApi?.randomUUID === "function") {
 		try { return cryptoApi.randomUUID(); } catch { /* fall through */ }
 	}

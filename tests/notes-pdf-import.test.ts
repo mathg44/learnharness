@@ -161,13 +161,13 @@ const transcriptionOnly = (run: ExtractionRunUsage | undefined) => {
 // ─── tests ───────────────────────────────────────────────────────────────────
 
 describe("PDF notes import (offline pipeline)", () => {
-	for (const trial of [false, true]) it(`transcribes every page in order and hands the whole Markdown to the extractor${trial ? " in server-trial mode" : ""}`, async (t) => {
-		const previous = process.env.LH_SERVER_TRIAL;
-		if (trial) process.env.LH_SERVER_TRIAL = "1";
-		else delete process.env.LH_SERVER_TRIAL;
+	for (const server of [false, true]) it(`transcribes every page in order and hands the whole Markdown to the extractor${server ? " in server mode" : ""}`, async (t) => {
+		const previous = process.env.LH_SERVER_MODE;
+		if (server) process.env.LH_SERVER_MODE = "tailscale";
+		else delete process.env.LH_SERVER_MODE;
 		t.after(() => {
-			if (previous === undefined) delete process.env.LH_SERVER_TRIAL;
-			else process.env.LH_SERVER_TRIAL = previous;
+			if (previous === undefined) delete process.env.LH_SERVER_MODE;
+			else process.env.LH_SERVER_MODE = previous;
 		});
 		const ledgers = memoryLedgers();
 		const seen: string[] = [];

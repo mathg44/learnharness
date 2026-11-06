@@ -1,11 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { desktopAPIAuthorized } from "./src/server/desktop-access.ts";
-import { evaluateTrialAccess } from "./src/server/trial-access.ts";
+import { evaluateServerAccess } from "./src/server/server-access.ts";
 
-/** Trial mode protects pages, APIs and streams. Desktop capabilities remain API-only. */
+/** Server mode protects pages, APIs and streams. Desktop capabilities remain API-only. */
 export function proxy(request: NextRequest) {
-	const trial = evaluateTrialAccess(request.method, request.headers);
-	if (!trial.allowed) {
+	const access = evaluateServerAccess(request.method, request.headers);
+	if (!access.allowed) {
 		return NextResponse.json({ error: "Access denied." }, { status: 403, headers: { "Cache-Control": "no-store" } });
 	}
 	if (!request.nextUrl.pathname.startsWith("/api/")) return NextResponse.next();

@@ -45,7 +45,7 @@ The server reads text and normalizes images locally. It transcribes every PDF pa
 
 A message can carry up to 100 attachments, limited to 25 MiB in total. PDFs are limited to 1,000 pages. Images use the app's existing size and dimension limits. Unsupported or oversized content is refused, not silently shortened.
 
-Processed contents are saved with the session on the server and survive reloads and server restarts. Original PDFs are not retained for download. Deleting the session removes its saved attachment content. Session attachments do not run the graph's file-import flow. This works in the private server trial without enabling server filesystem tools.
+Processed contents are saved with the session on the server and survive reloads and server restarts. Original PDFs are not retained for download. Deleting the session removes its saved attachment content. Session attachments do not run the graph's file-import flow. This works on the [private server](private-server.md) without enabling server filesystem tools.
 
 ### Desktop file paths
 

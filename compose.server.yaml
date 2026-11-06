@@ -1,0 +1,8 @@
+# Private Tailscale server. Use with compose.yaml, project name "learnharness"
+# and an explicit private --env-file outside the checkout. See docs/private-server.md.
+services:
+  app:
+    image: learnharness:server
+    environment:
+      LH_SERVER_MODE: tailscale
+      LH_SERVER_ORIGIN: ${LH_SERVER_ORIGIN:?Set the Tailscale Serve HTTPS origin}

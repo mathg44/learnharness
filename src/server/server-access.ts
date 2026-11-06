@@ -1,16 +1,19 @@
 /**
- * Trial topology: owner -> Tailscale Serve HTTPS -> host-loopback Docker port.
- * Serve strips client identity headers and supplies Tailscale-User-Login.
+ * Server topology: tailnet user -> Tailscale Serve HTTPS -> host-loopback
+ * Docker port. Serve strips client identity headers and supplies
+ * Tailscale-User-Login for authenticated tailnet users. Any such user is
+ * accepted; access control beyond that is the tailnet's membership and ACLs.
  * Host administrators and other local processes are trusted, since they can
  * already read the app's credentials or control Docker. Never publish the
- * backend port to a LAN/tailnet interface or use this behind another ingress.
- * Verify the actual Serve Host/forwarded headers when enabling the route.
+ * backend port to a LAN/tailnet interface, enable Funnel, or use this behind
+ * another ingress. Verify the actual Serve Host/forwarded headers when
+ * enabling the route.
  */
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
-export type TrialAccessDecision =
+export type ServerAccessDecision =
 	| { allowed: true }
-	| { allowed: false; reason: "trial_misconfigured" | "identity" | "host" | "origin" };
+	| { allowed: false; reason: "server_misconfigured" | "identity" | "host" | "origin" };
 
 function configuredOrigin(raw: string | undefined): { origin: string; host: string } | null {
 	if (!raw) return null;
@@ -24,18 +27,18 @@ function configuredOrigin(raw: string | undefined): { origin: string; host: stri
 	return { origin: url.origin, host: url.host };
 }
 
-/** Fail closed when enabled without a valid owner and public HTTPS origin. */
-export function evaluateTrialAccess(
+/** Unset LH_SERVER_MODE allows everything (desktop and local development).
+ * Any value other than "tailscale", or a missing/invalid origin, fails closed. */
+export function evaluateServerAccess(
 	method: string,
 	headers: Headers,
 	env: Record<string, string | undefined> = process.env,
-): TrialAccessDecision {
-	if (env.LH_SERVER_TRIAL !== "1") return { allowed: true };
+): ServerAccessDecision {
+	if (env.LH_SERVER_MODE === undefined) return { allowed: true };
 
-	const owner = env.LH_SERVER_TRIAL_OWNER;
-	const origin = configuredOrigin(env.LH_SERVER_TRIAL_ORIGIN);
-	if (!owner || owner.trim() !== owner || owner.includes(",") || !origin) return { allowed: false, reason: "trial_misconfigured" };
-	if (headers.get("tailscale-user-login") !== owner) return { allowed: false, reason: "identity" };
+	const origin = configuredOrigin(env.LH_SERVER_ORIGIN);
+	if (env.LH_SERVER_MODE !== "tailscale" || !origin) return { allowed: false, reason: "server_misconfigured" };
+	if (!headers.get("tailscale-user-login")) return { allowed: false, reason: "identity" };
 
 	const forwardedHost = headers.get("x-forwarded-host");
 	const forwardedProto = headers.get("x-forwarded-proto");
