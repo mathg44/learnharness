@@ -50,6 +50,43 @@ While a capability is unavailable, the tool registries leave its tools out of wh
 
 Settings → Agent still shows switches for research, demo, visual and PDF. On the server they have no effect while the capability is unavailable. Turning one on does not bypass the check.
 
+### Research network rules (#23)
+
+Research is still unavailable. Its `ready()` returns false until #27 adds container egress protection. #23 adds the application-level rules that will apply once it is restored. Nothing switches them on at runtime. Tests mock readiness instead.
+
+In server mode, page fetches and search requests go through `publicFetch` in [public-fetch.ts](../src/agent/public-fetch.ts). It always enforces these rules. Inference providers get no exception.
+
+- Only `http` on port 80 and `https` on port 443. URLs with embedded credentials are refused.
+- Every DNS answer for the host must be a public address, and each redirect hop is resolved and checked again. Public means public IPv4 or ordinary global IPv6 in `2000::/3`, minus conservative IANA special-use ranges. IPv4-mapped, NAT64, Teredo and 6to4 addresses are refused.
+- The connection goes to the vetted IP literal while keeping the original Host header and TLS SNI, so certificate checks still use the hostname. The socket's actual peer address is checked again before any HTTP is sent.
+- Responses may use gzip, deflate or br. Any other content encoding is refused. Each response's headers are capped at 16 KiB. The transferred-byte budget counts received HTTP bytes before parsing, including headers, informational responses, chunk framing and every redirect hop. Decompressed content has its own counter under the same limit.
+- Cancelling the tool call aborts the request in flight.
+
+The two kinds of traffic get different limits:
+
+| | `web_fetch` page | `web_search` |
+| --- | --- | --- |
+| Destinations | Any public URL | Five fixed endpoints, listed below |
+| Redirects | Up to 5 | None, same host included |
+| Time | 30 s for the whole chain: DNS, connect, headers, body | 30 s |
+| Bytes | 5 MiB of received HTTP bytes across the chain, and 5 MiB after decompression | 1 MiB of received HTTP bytes, and 1 MiB after decompression |
+
+The search endpoints in [server/search.ts](../src/server/search.ts) are the only ones a search key is sent to:
+
+| Engine | Endpoint |
+| --- | --- |
+| Tavily | `POST https://api.tavily.com/search` |
+| Brave | `GET https://api.search.brave.com/res/v1/web/search` |
+| Exa | `POST https://api.exa.ai/search` |
+| Firecrawl | `POST https://api.firecrawl.dev/v2/search` |
+| Ollama | `POST https://ollama.com/api/web_search` |
+
+The transport enforces each endpoint's listed method. POST endpoints accept no query string; Brave accepts only one `q` and one `count` parameter. Each engine sends only its own key. Engine selection is unchanged and read fresh on each call. A pinned engine without a key is reported as unavailable; the app does not quietly try another. On the server, search errors report the provider and HTTP status only, never response bodies or transport details.
+
+Page text extraction keeps the 40,000-character output limit. The Jina Reader fallback for JavaScript-rendered pages is off in server mode, since that service fetches the target itself and the local checks can't constrain it. Such pages fail with an honest extraction error. Desktop and local development keep plain `fetch` and the Jina fallback.
+
+This is enforcement inside the app. No app-scoped firewall exists yet; that is #27. Remote PDF downloads and the PDF tools stay disabled under #24, which is expected to reuse `publicFetch` for downloads. File tools stay disabled under #22, which is deferred. Upload material through the browser instead.
+
 Still available on the server: teaching, probing, practice, mathematics, the knowledge graph, uploaded-note imports (including page-by-page PDF transcription with the PDF-reader model), and browser session attachments. Session attachments are explicit uploads and do not enable file tools. See [session attachments](getting-started.md#attach-material-to-a-session).
 
 ## Start and stop
@@ -168,4 +205,5 @@ The trial ran as project `learnharness-trial` with image `learnharness:trial`, v
 ## Verification
 
 - `npm test` includes [server-access.test.ts](../tests/server-access.test.ts), [server-capabilities.test.ts](../tests/server-capabilities.test.ts) and [server-healthcheck.test.ts](../tests/server-healthcheck.test.ts).
+- [public-fetch.test.ts](../tests/public-fetch.test.ts), [server-search-fetch.test.ts](../tests/server-search-fetch.test.ts) and [server-research.test.ts](../tests/server-research.test.ts) cover the #23 rules, actual tool calls, research dispatch/recovery and pending session delivery. They use synthetic engines, controlled DNS and sockets, and real Node HTTP parsing. A disposable loopback listener also verifies rejection of a real mismatched socket peer before any HTTP bytes are sent. No live provider credentials are involved.
 - [scripts/smoke-server-access-runtime.mjs](../scripts/smoke-server-access-runtime.mjs) builds the production standalone server in a disposable copy. It then sends accepted and rejected requests to pages, chats, uploads, image routes, provider and settings writes, the chat and events streams, and the health check. It covers server mode, misconfigured server mode and normal mode. Its header explains how to make the copy. It uses a synthetic provider that only answers model discovery.
