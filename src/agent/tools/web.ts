@@ -43,13 +43,21 @@ const FETCH_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 /** Keep the researcher's context sane — long pages truncate with a marker. */
 const MAX_CONTENT_CHARS = 40_000;
+const TRUNCATION_MARKER = `\n\n[Truncated at ${MAX_CONTENT_CHARS} characters]`;
 const MIN_USEFUL_CONTENT = 200;
 
 const turndown = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" });
 
 function truncate(text: string): string {
 	if (text.length <= MAX_CONTENT_CHARS) return text;
-	return `${text.slice(0, MAX_CONTENT_CHARS)}\n\n[Truncated at ${MAX_CONTENT_CHARS} characters]`;
+	return text.slice(0, MAX_CONTENT_CHARS) + TRUNCATION_MARKER;
+}
+
+/** Preserve desktop's content-only truncation. The server's final bound
+ * includes titles, source metadata, errors and the truncation marker itself. */
+function capServerFetchOutput(text: string): string {
+	if (!isServerMode() || text.length <= MAX_CONTENT_CHARS) return text;
+	return text.slice(0, MAX_CONTENT_CHARS - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
 }
 
 /** Jina Reader fallback for JS-rendered pages (no deps — plain fetch). */
@@ -188,12 +196,12 @@ export function createWebTools(search: () => SearchProvider | null): Record<stri
 					if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
 						throw new Error("Only http(s) URLs are supported");
 				} catch {
-					return `web_fetch failed: invalid URL "${url}"`;
+					return capServerFetchOutput(`web_fetch failed: invalid URL "${url}"`);
 				}
 				try {
-					return await fetchAndExtract(url, signal);
+					return capServerFetchOutput(await fetchAndExtract(url, signal));
 				} catch (err) {
-					return `web_fetch failed for ${url}: ${err instanceof Error ? err.message : String(err)}`;
+					return capServerFetchOutput(`web_fetch failed for ${url}: ${err instanceof Error ? err.message : String(err)}`);
 				}
 			}),
 		},

@@ -83,7 +83,7 @@ The search endpoints in [server/search.ts](../src/server/search.ts) are the only
 
 The transport enforces each endpoint's listed method. POST endpoints accept no query string; Brave accepts only one `q` and one `count` parameter. Each engine sends only its own key. Engine selection is unchanged and read fresh on each call. A pinned engine without a key is reported as unavailable; the app does not quietly try another. On the server, search errors report the provider and HTTP status only, never response bodies or transport details.
 
-Page text extraction keeps the 40,000-character output limit. The Jina Reader fallback for JavaScript-rendered pages is off in server mode, since that service fetches the target itself and the local checks can't constrain it. Such pages fail with an honest extraction error. Desktop and local development keep plain `fetch` and the Jina fallback.
+Server page-fetch output is capped at 40,000 characters for the complete result, including the title, source metadata, errors and truncation marker. The Jina Reader fallback for JavaScript-rendered pages is off in server mode, since that service fetches the target itself and the local checks can't constrain it. Such pages fail with an honest extraction error. Desktop and local development keep plain `fetch` and the Jina fallback.
 
 This is enforcement inside the app. No app-scoped firewall exists yet; that is #27. Remote PDF downloads and the PDF tools stay disabled under #24, which is expected to reuse `publicFetch` for downloads. File tools stay disabled under #22, which is deferred. Upload material through the browser instead.
 

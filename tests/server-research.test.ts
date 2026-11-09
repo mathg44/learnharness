@@ -145,8 +145,24 @@ it("actual web_fetch bounds chunked bytes, decompressed bodies and output charac
 	for (let i = 0; i < 2; i++) assert.match(String((await run(tool, { url: "https://public.example/large" })).details), /Response too large/);
 	const out = await run(tool, { url: "https://public.example/long" });
 	assert.match(String(out.details), /Truncated at 40000 characters/);
-	assert.ok(String(out.details).length < 40_200);
+	assert.equal(String(out.details).length, 40_000);
 	assert.ok(fixture.sockets.every((socket) => socket.destroyed));
+});
+
+it("caps the complete server output including oversized titles, source URLs and error metadata", async (t) => {
+	t.mock.method(SERVER_CAPABILITIES.research, "ready", () => true);
+	const title = "Synthetic title ".repeat(5_000);
+	installPublicHttp(t, { responses: [
+		{ headers: { "content-type": "text/html" }, body: `<html><head><title>${title}</title></head><body><article><h1>${title}</h1><p>${"Synthetic article content for the lesson. ".repeat(30)}</p></article></body></html>` },
+		{ body: "Short source body" },
+	] });
+	const tool = createWebTools(() => null).web_fetch!;
+	for (const url of ["https://public.example/title", `https://public.example/?source=${"x".repeat(45_000)}`, `invalid-url-${"x".repeat(45_000)}`]) {
+		const out = await run(tool, { url });
+		const text = String(out.details);
+		assert.equal(text.length, 40_000);
+		assert.match(text, /\[Truncated at 40000 characters\]$/);
+	}
 });
 
 it("tool cancellation reaches the in-flight response body and search provider", async (t) => {
