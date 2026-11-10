@@ -4,7 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { PDFPageProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
-import { standardFontsDir } from "./pdf-ops";
+import { pdfCheckpoint } from "./pdf-markdown.ts";
+import { type PdfOperationOptions, withPdfDocument } from "./pdf-ops.ts";
 
 /**
  * Verification engines for sub-agents: demos use the app's own Electron
@@ -49,7 +50,7 @@ export interface RenderSvgOptions {
 	height?: number;
 }
 
-export interface RenderPdfOptions {
+export interface RenderPdfOptions extends PdfOperationOptions {
 	/** Render DPI — 72 is 100% zoom; the skill's guidance is 100/150/200. */
 	dpi?: number;
 }
@@ -537,23 +538,23 @@ async function renderPdfPages(
 	// that used to run in the Chrome shim tab; only the canvas host changed
 	// (Skia in-process instead of a DOM canvas). Text-side pdf tools never
 	// needed a browser; now renders don't either.
-	const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-	const data = new Uint8Array(fs.readFileSync(path.resolve(pdfPath)));
-	// Standard-font data as a directory path (live-smoke finding 2026-09-19:
-	// without it pdfjs renders non-embedded standard fonts via fallback);
-	// verbosity 0 = errors only (JBIG2 noise on scanned PDFs).
-	const loadingTask = pdfjs.getDocument({ data, standardFontDataUrl: standardFontsDir(), verbosity: 0 });
-	const doc = await loadingTask.promise;
-	try {
+	// withPdfDocument opens with the shared standard-font directory, enforces
+	// maxPages, and destroys the loading task on every path; aborting destroys
+	// it early, which cancels the page render in progress.
+	return withPdfDocument(pdfPath, opts, async (doc) => {
 		const out: RenderedPdfPage[] = [];
 		for (const pageNo of pages) {
 			if (pageNo < 1 || pageNo > doc.numPages) continue;
-			out.push({ page: pageNo, png: await renderPdfPage(await doc.getPage(pageNo), dpi) });
+			await pdfCheckpoint(opts.signal);
+			const page = await doc.getPage(pageNo);
+			try {
+				out.push({ page: pageNo, png: await renderPdfPage(page, dpi) });
+			} finally {
+				page.cleanup();
+			}
 		}
 		return out;
-	} finally {
-		await loadingTask.destroy().catch(() => {});
-	}
+	});
 }
 
 /** Render one open pdfjs page to a provider-safe PNG with bounded canvas

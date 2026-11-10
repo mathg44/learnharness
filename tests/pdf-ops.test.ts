@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { parsePageSpec, pdfExtract, pdfInfo, pdfProbe, pdfSearch } from "../src/agent/subagents/pdf-ops.ts";
+import { parsePageSpec, PdfPageLimitError, pdfExtract, pdfInfo, pdfProbe, pdfSearch } from "../src/agent/subagents/pdf-ops.ts";
 import { tinyPdf } from "./helpers/tiny-pdf.ts";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-3page.pdf");
@@ -123,6 +123,64 @@ describe("pdf-ops — the pdfjs text layer", () => {
 		await pdfProbe(FIXTURE); // resolves
 		const garbage = path.join(import.meta.dirname, "fixtures", "not-a-pdf.txt");
 		await assert.rejects(() => pdfProbe(garbage));
+	});
+
+	it("every operation refuses a PDF longer than maxPages and accepts one at the limit", async () => {
+		const operations = [
+			(maxPages: number) => pdfInfo(FIXTURE, { maxPages }),
+			(maxPages: number) => pdfProbe(FIXTURE, { maxPages }),
+			(maxPages: number) => pdfExtract(FIXTURE, "1", { maxPages }),
+			(maxPages: number) => pdfSearch(FIXTURE, "force", { literal: true, maxPages }),
+		];
+		for (const run of operations) {
+			await assert.rejects(run(2), (err) => {
+				assert.ok(err instanceof PdfPageLimitError);
+				assert.equal(err.name, "PdfPageLimitError");
+				assert.equal(err.message, "PDF has 3 pages; the limit is 2.");
+				assert.deepEqual([err.pageCount, err.maxPages], [3, 2]);
+				return true;
+			});
+			await run(3);
+		}
+	});
+
+	it("every operation rejects with the signal's reason when already aborted", async () => {
+		const reason = new Error("job cancelled");
+		const signal = AbortSignal.abort(reason);
+		for (const run of [
+			() => pdfInfo(FIXTURE, { signal }),
+			() => pdfProbe(FIXTURE, { signal }),
+			() => pdfExtract(FIXTURE, "all", { signal }),
+			() => pdfSearch(FIXTURE, "force", { literal: true, signal }),
+		]) {
+			await assert.rejects(run(), (err) => err === reason);
+		}
+	});
+
+	it("aborting a long walk rejects with the signal's reason, and the file stays readable", async () => {
+		const file = path.join(os.tmpdir(), `pdf-ops-abort-${process.pid}.pdf`);
+		fs.writeFileSync(file, tinyPdf(Array.from({ length: 1000 }, (_, i) => ({ runs: [{ text: `Page ${i + 1} prose`, x: 72, y: 700 }] }))));
+		try {
+			for (const run of [
+				(signal: AbortSignal) => pdfInfo(file, { signal }),
+				(signal: AbortSignal) => pdfExtract(file, "all", { signal }),
+				(signal: AbortSignal) => pdfSearch(file, "prose", { literal: true, signal }),
+			]) {
+				const controller = new AbortController();
+				const reason = new Error("job cancelled");
+				setTimeout(() => controller.abort(reason), 50);
+				await assert.rejects(run(controller.signal), (err) => err === reason);
+			}
+			assert.match(await pdfExtract(file, "1000"), /Page 1000 prose/);
+		} finally {
+			fs.rmSync(file, { force: true });
+		}
+	});
+
+	it("a PDF that fails to open still rejects, and maxPages does not mask it", async () => {
+		const garbage = path.join(import.meta.dirname, "fixtures", "not-a-pdf.txt");
+		await assert.rejects(pdfInfo(garbage, { maxPages: 1000 }), (err) => !(err instanceof PdfPageLimitError));
+		await pdfProbe(FIXTURE, { maxPages: 1000 });
 	});
 
 	it("parsePageSpec: all / ranges / lists / clamping", () => {

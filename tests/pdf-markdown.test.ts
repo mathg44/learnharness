@@ -261,7 +261,7 @@ describe("pdf-markdown — page kinds", () => {
 			"paintImageMaskXObject", "paintImageMaskXObjectGroup", "paintImageMaskXObjectRepeat", "paintSolidColorImageMask", "constructPath"] as const;
 		for (const name of names) {
 			const doc = { numPages: 1, getPage: async () => ({ pageNumber: 1,
-				getTextContent: async () => ({ items: [] }), getOperatorList: async () => ({ fnArray: [OPS[name]] }),
+				getTextContent: async () => ({ items: [] }), getOperatorList: async () => ({ fnArray: [OPS[name]] }), cleanup: () => true,
 			}) } as unknown as PDFDocumentProxy;
 			const out = await documentToMarkdown(doc);
 			assert.equal(out[0]?.kind, name === "constructPath" ? "empty" : "image-only", name);

@@ -1,3 +1,4 @@
+import { setImmediate as nextMacrotask } from "node:timers/promises";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 /**
@@ -31,11 +32,6 @@ interface Line {
 	size: number;
 	y: number;
 	x0: number;
-}
-
-interface PageScan {
-	page: PDFPageProxy;
-	lines: Line[];
 }
 
 type Block =
@@ -154,15 +150,14 @@ function splitColumns(lines: Glyph[][]): Glyph[][] {
 	return lines;
 }
 
-async function scanPage(page: PDFPageProxy): Promise<PageScan> {
+async function scanPage(page: PDFPageProxy): Promise<Line[]> {
 	const glyphs = (await page.getTextContent()).items.flatMap((item) => toGlyph(item) ?? []);
 	const groups: Glyph[][] = [[]];
 	for (const glyph of glyphs) {
 		groups.at(-1)!.push(glyph);
 		if (glyph.hasEOL) groups.push([]);
 	}
-	const lines = splitColumns(groups).flatMap((group) => toLine(group) ?? []);
-	return { page, lines };
+	return splitColumns(groups).flatMap((group) => toLine(group) ?? []);
 }
 
 /** Whether a page without text draws a picture. Asked only of such pages: building the operator list
@@ -252,25 +247,49 @@ function toMarkdown(blocks: readonly Block[]): string {
 		.replace(/\n\n\n/g, "\n");
 }
 
-/** Convert the given pages (default: all). Formatting is page-local so search and selected reads agree. */
-export async function documentToMarkdown(doc: PDFDocumentProxy, pageNumbers?: readonly number[]): Promise<PdfPage[]> {
+/** Between pages of a cancellable walk. pdfjs's in-process fake worker settles everything through
+ * microtasks, so without a macrotask turn an abort timer (a job timeout) never fires until the walk
+ * ends. Without a signal nothing yields, so uncancellable callers keep their old scheduling. */
+export async function pdfCheckpoint(signal?: AbortSignal): Promise<void> {
+	if (!signal) return;
+	signal.throwIfAborted();
+	await nextMacrotask();
+	signal.throwIfAborted();
+}
+
+async function convertPage(page: PDFPageProxy, signal?: AbortSignal): Promise<PdfPage> {
+	const number = page.pageNumber;
+	const lines = await scanPage(page);
+	signal?.throwIfAborted();
+	if (!lines.length) return { kind: (await drawsImage(page)) ? "image-only" : "empty", number };
+	// Judge the body below the page's largest size (often its title), falling
+	// back to the page's dominant size for uniform text. Never depend on which
+	// other pages were requested: that would change title order and search lines.
+	const top = Math.max(...lines.map(roundSize));
+	const body = bodySize(lines.filter((l) => roundSize(l) < top)) || bodySize(lines);
+	return { kind: "text", number, markdown: toMarkdown(toBlocks(titleFirst(lines, body), body)) };
+}
+
+/** Convert the given pages (default: all), releasing each page once converted. Formatting is
+ * page-local so search and selected reads agree. The signal is checked around every page; the
+ * caller owns the document, so aborting it is how in-flight pdfjs work stops. */
+export async function documentToMarkdown(
+	doc: PDFDocumentProxy,
+	pageNumbers?: readonly number[],
+	opts: { signal?: AbortSignal } = {},
+): Promise<PdfPage[]> {
 	const numbers = pageNumbers ?? Array.from({ length: doc.numPages }, (_, i) => i + 1);
-	const pages: PageScan[] = [];
-	for (const n of numbers) pages.push(await scanPage(await doc.getPage(n)));
 	const out: PdfPage[] = [];
-	for (const p of pages) {
-		const number = p.page.pageNumber;
-		if (!p.lines.length) {
-			out.push({ kind: (await drawsImage(p.page)) ? "image-only" : "empty", number });
-			continue;
+	for (const n of numbers) {
+		await pdfCheckpoint(opts.signal);
+		const page = await doc.getPage(n);
+		try {
+			out.push(await convertPage(page, opts.signal));
+		} finally {
+			page.cleanup();
 		}
-		// Judge the body below the page's largest size (often its title), falling
-		// back to the page's dominant size for uniform text. Never depend on which
-		// other pages were requested: that would change title order and search lines.
-		const top = Math.max(...p.lines.map(roundSize));
-		const body = bodySize(p.lines.filter((l) => roundSize(l) < top)) || bodySize(p.lines);
-		out.push({ kind: "text", number, markdown: toMarkdown(toBlocks(titleFirst(p.lines, body), body)) });
 	}
+	opts.signal?.throwIfAborted();
 	return out;
 }
 

@@ -12,7 +12,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { MAX_PDF_CANVAS_PIXELS, MAX_PDF_CANVAS_SIDE, pdfCanvasGeometry, realHeadless } from "../src/agent/subagents/headless.ts";
-import { standardFontsDir } from "../src/agent/subagents/pdf-ops.ts";
+import { PdfPageLimitError, standardFontsDir } from "../src/agent/subagents/pdf-ops.ts";
+import { tinyPdf } from "./helpers/tiny-pdf.ts";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-3page.pdf");
 
@@ -164,6 +165,30 @@ describe("native pdf_render (pdfjs paints, @napi-rs/canvas hosts)", () => {
 	it("rejects invalid DPI before opening the PDF", async () => {
 		for (const dpi of [0, -1, NaN, Infinity, -Infinity, Number.MIN_VALUE]) {
 			await assert.rejects(realHeadless.renderPdfPages("unused.pdf", [1], { dpi }), /DPI must be finite and positive/);
+		}
+	});
+
+	it("refuses a PDF longer than maxPages before rendering, and renders one at the limit", async () => {
+		await assert.rejects(
+			realHeadless.renderPdfPages(FIXTURE, [1], { dpi: 72, maxPages: 2 }),
+			(err) => err instanceof PdfPageLimitError && err.pageCount === 3 && err.maxPages === 2,
+		);
+		assert.equal((await realHeadless.renderPdfPages(FIXTURE, [1], { dpi: 72, maxPages: 3 })).length, 1);
+	});
+
+	it("rejects with the signal's reason when aborted before or during rendering", async () => {
+		const reason = new Error("job cancelled");
+		await assert.rejects(realHeadless.renderPdfPages(FIXTURE, [1], { signal: AbortSignal.abort(reason) }), (err) => err === reason);
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lh-pdf-abort-test-"));
+		try {
+			const file = path.join(dir, "many.pdf");
+			fs.writeFileSync(file, tinyPdf(Array.from({ length: 200 }, (_, i) => ({ runs: [{ text: `Page ${i + 1}`, x: 72, y: 700 }] }))));
+			const controller = new AbortController();
+			setTimeout(() => controller.abort(reason), 50);
+			const all = Array.from({ length: 200 }, (_, i) => i + 1);
+			await assert.rejects(realHeadless.renderPdfPages(file, all, { dpi: 150, signal: controller.signal }), (err) => err === reason);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
