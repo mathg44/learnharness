@@ -1,0 +1,17 @@
+# Template for the daily private-server snapshot (#29). Not installed by anything.
+# Copy it and learnharness-backup.timer to /etc/systemd/system/ yourself.
+#
+# /etc/learnharness/backup.env sits outside the checkout and holds only paths:
+#   LH_BACKUP_CHECKOUT=/absolute/path/to/learnharness
+#   LH_BACKUP_SERVER_ENV=/absolute/private/path/server.env
+# The backup directory must already exist, owned by the service user, mode 0700.
+[Unit]
+Description=LearnHarness private server snapshot
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/learnharness/backup.env
+UMask=0077
+ExecStart=/usr/bin/node ${LH_BACKUP_CHECKOUT}/scripts/server-backup.mjs create --env-file ${LH_BACKUP_SERVER_ENV} --directory /var/lib/learnharness-backups --kind daily

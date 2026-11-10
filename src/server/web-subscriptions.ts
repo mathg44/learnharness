@@ -5,7 +5,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { AUTH_FILE } from "../../config.ts";
-import { createChatGPT, fileStore } from "../../electron/chatgpt.cjs";
+import { createChatGPT } from "../../electron/chatgpt.cjs";
+import { webCredentialFiles } from "./credential-files.ts";
 import { createSubscriptions } from "../../electron/subscriptions.cjs";
 import { chatGPTControl } from "../../electron/chatgpt-ipc.cjs";
 import { subscriptionControl } from "../../electron/subscription-ipc.cjs";
@@ -44,6 +45,7 @@ export function createWebSubscriptionOwner(options: {
 	onPacket?: (channel: Channel, packet: Packet) => void;
 } ) {
 	const notify = options.onPacket ?? (() => {});
+	const files = webCredentialFiles(options.directory);
 	const launches = new AsyncLocalStorage<string[]>();
 	const actions = new Map<string, BrowserAction>();
 	let chatGPTLaunch = 0;
@@ -53,12 +55,12 @@ export function createWebSubscriptionOwner(options: {
 		captured.push(target);
 	};
 	const chatgpt = createChatGPT({
-		store: options.chatgptStore ?? fileStore(path.join(options.directory, "chatgpt-credentials.json")),
+		store: options.chatgptStore ?? files.chatgpt,
 		openExternal,
 		onChange: (packet?: Packet) => { if (packet) notify("lh:chatgpt", packet); },
 	});
 	const native = createSubscriptions({
-		directory: options.directory, sdk: options.sdk, loadSDK, openExternal,
+		directory: options.directory, stores: files.native, sdk: options.sdk, loadSDK, openExternal,
 		onChange: (snapshot: NativeSubscriptionSnapshot) => notify("lh:subscriptions", { channel: "lh:subscriptions", op: "changed", snapshot }),
 	});
 	return {

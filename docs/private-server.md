@@ -154,9 +154,13 @@ tailscale serve --bg --https=443 http://127.0.0.1:3000
 
 Inspect `tailscale serve status` and `tailscale funnel status` before changing anything on a host with other services.
 
-## Snapshot before updates
+## Backups
 
-Wait for lessons and background work to finish, then stop the app. Back up **both** volumes while stopped. Auth snapshots contain credentials; store them privately outside Git and build contexts.
+[scripts/server-backup.mjs](../scripts/server-backup.mjs) snapshots both volumes while the app keeps running, with the running image ID, runtime environment and mounts. It also saves the supplied env file and matching egress policy, plus the checkout's Compose recipes. Take a `--kind pre-update` snapshot before every update. A daily systemd timer template is included but not installed. Snapshots stay on this host; they do not protect against disk or server loss. See [Private server backups](backups.md).
+
+### Stopped-volume snapshot
+
+The trial migration below still uses a plain copy of stopped volumes. Wait for lessons and background work to finish, then stop the app. Copy **both** volumes while stopped. Auth snapshots contain credentials; store them privately outside Git and build contexts.
 
 ```bash
 umask 077
@@ -170,7 +174,7 @@ docker run --rm --network none --read-only --user 1000:1000 \
   tar -czf - -C / data auth > "$BACKUP_DIR/server-$(date +%Y%m%d-%H%M%S).tar.gz"
 ```
 
-Check that it succeeded before restarting. Keep the previous image tagged before building a replacement. Scheduled backups (#29) and tested update rollback (#30) are separate work.
+Check that it succeeded before restarting. Keep the previous image tagged before building a replacement. Tested update rollback is #30.
 
 ## Migrating from the trial
 
@@ -237,6 +241,7 @@ The trial ran as project `learnharness-trial` with image `learnharness:trial`, v
 
 ## Verification
 
+- [Backups](backups.md) and their [verification checklist](verification/29-consistent-backups.md) cover online capture, snapshot checks, retention and restore into disposable volumes.
 - [Container enforcement](container-egress.md) and its [verification checklist](verification/27-container-egress.md) cover policy, live namespace-bound readiness, disposable IPv4/IPv6 endpoints, browser/subprocess traffic, guard failure and recreation.
 - `npm test` includes [server-access.test.ts](../tests/server-access.test.ts), [server-capabilities.test.ts](../tests/server-capabilities.test.ts) and [server-healthcheck.test.ts](../tests/server-healthcheck.test.ts).
 - [server-research-pdf.test.ts](../tests/server-research-pdf.test.ts) and [server-pdf-jobs.test.ts](../tests/server-pdf-jobs.test.ts) cover #24 downloads, text reading, native rendering, denial, cancellation, cleanup and research dispatch/recovery with synthetic engines and public HTTP sockets. [pdf-ops.test.ts](../tests/pdf-ops.test.ts) and [pdf-native-render.test.ts](../tests/pdf-native-render.test.ts) cover native page limits and cancellation.

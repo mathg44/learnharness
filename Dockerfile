@@ -34,6 +34,7 @@ ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 \
     XDG_CONFIG_HOME=/tmp/config XDG_CACHE_HOME=/tmp/cache XDG_DATA_HOME=/tmp/xdg-data
 COPY --from=build /workspace/.next/standalone ./
 COPY scripts/container/entrypoint.sh scripts/container/healthcheck.mjs /usr/local/lib/learnharness/
+COPY scripts/backup/profile.cjs scripts/backup/export.mjs /usr/local/lib/learnharness/backup/
 COPY scripts/egress/ /usr/local/lib/learnharness/egress/
 RUN mkdir -p /data /auth /app/.next/cache \
     && chown 1000:1000 /data /auth \

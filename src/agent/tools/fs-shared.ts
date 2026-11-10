@@ -2,7 +2,7 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AUTH_FILE } from "../../../config.ts";
+import { AUTH_FILE, BACKUP_STAGING_DIR } from "../../../config.ts";
 import { comparisonPath, guardSourcePath, isWithin, realSourcePath as realOrMissing, resolvePolicy, type ResolvedFileAccessPolicy } from "./file-access.ts";
 
 /**
@@ -91,16 +91,17 @@ const CREDENTIAL_TEMP = /^(?:\.auth\.json\.tmp-\d+|(?:chatgpt|github-copilot|xai
 const ATOMIC_TEMP_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function credentialFiles(authFile: string): string[] {
-	return [authFile, ...SUBSCRIPTION_FILES.map((name) => path.join(/* turbopackIgnore: true */ path.dirname(authFile), name))];
+	return [authFile, BACKUP_STAGING_DIR, ...SUBSCRIPTION_FILES.map((name) => path.join(/* turbopackIgnore: true */ path.dirname(authFile), name))];
 }
 
 function isCredentialTemp(absolute: string, directory: string, authBasename: string): boolean {
 	const file = comparisonPath(absolute);
 	if (path.relative(comparisonPath(directory), path.dirname(file)) !== "") return false;
 	const name = path.basename(file);
-	const prefix = `${authBasename}.tmp-`;
-	return CREDENTIAL_TEMP.test(name) ||
-		(name.toLowerCase().startsWith(prefix.toLowerCase()) && ATOMIC_TEMP_UUID.test(name.slice(prefix.length)));
+	return CREDENTIAL_TEMP.test(name) || [authBasename, ...SUBSCRIPTION_FILES].some((basename) => {
+		const prefix = `${basename}.tmp-`;
+		return name.toLowerCase().startsWith(prefix.toLowerCase()) && ATOMIC_TEMP_UUID.test(name.slice(prefix.length));
+	});
 }
 
 /** String-only check, also usable with synthetic home/credential locations.

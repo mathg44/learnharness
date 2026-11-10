@@ -33,7 +33,7 @@ docker compose --env-file /dev/null -p learnharness-local stop
 docker compose --env-file /dev/null -p learnharness-local down
 ```
 
-The project name is part of storage identity. Reusing it retains records; changing it starts another profile. Never run two app processes against the same data/auth volumes. Do not scale this service. Do not use `down --volumes` with records you want to keep. Make private backups of **both** volumes while the app is stopped before upgrades; container replacement is not a backup and these files are not a transactional database.
+The project name is part of storage identity. Reusing it retains records; changing it starts another profile. Never run two app processes against the same data/auth volumes. Do not scale this service. Do not use `down --volumes` with records you want to keep. Make private backups of **both** volumes while the app is stopped before upgrades; container replacement is not a backup and these files are not a transactional database. The private server instead uses [online snapshots](backups.md), which rely on its server-mode capture socket.
 
 The server listens on `0.0.0.0:3000` **inside** the container so Docker can forward traffic. [compose.yaml](../compose.yaml) publishes only `127.0.0.1:3000:3000`, not a LAN/Tailscale/wildcard host address. Do not replace it with `3000:3000`, host networking, or a remote proxy before the separate access gate passes. No proxy or firewall configuration is included. While the port is published, trust only local access. Existing web APIs have no browser-user authentication; the separate access/host gate must address DNS rebinding and cross-site writes. Use a current Docker Engine; older Docker versions have known localhost-publication caveats.
 
@@ -47,7 +47,7 @@ The app runs as numeric UID/GID `1000:1000`, including startup. Root owns runtim
 | --- | --- |
 | `/data` | Dedicated `app-data` named volume, `LH_DATA_DIR`. Conversations including plans/practice/usage, jobs/delivery records, graph ledgers/metadata/positions/rendering, settings, prompt overrides, and optional debug output. |
 | `/auth` | Dedicated `app-auth` named volume. `LH_AUTH_FILE=/auth/auth.json`; web ChatGPT/Copilot/Grok credential sidecars and atomic-write temporary files live beside it. Mount the directory, not a single auth file, because saves use rename. |
-| `/tmp` | 256 MiB tmpfs with `noexec,nosuid,nodev`. Temporary files, empty container home, XDG configuration/cache/data directories. Cleared on restart/replacement. |
+| `/tmp` | 256 MiB tmpfs with `noexec,nosuid,nodev`. Temporary files, empty container home, XDG configuration/cache/data directories. In server mode, also the private backup capture socket and staging copy under `/tmp/learnharness-backup`, which share this limit. Cleared on restart/replacement. |
 | `/app/.next/cache` | Separate 256 MiB tmpfs for Next/image cache, owned by UID 1000. Rebuildable, never learner storage. |
 | `/app` and `/usr/local/lib/learnharness` | Read-only application, assets, startup and health code. |
 
