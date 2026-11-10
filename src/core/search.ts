@@ -47,10 +47,11 @@ export function isSearchEngineId(value: unknown): value is SearchEngineId {
 /** A live search engine: an id (for status/labels) + one operation. The
  *  adapters own their wire protocol (fetch, timeouts, error mapping) —
  *  callers see only this. `search` throws on failure (adapters map HTTP
- *  errors to clear Error messages); the tool layer catches and reports. */
+ *  errors to clear Error messages); the tool layer catches and reports.
+ *  `signal` cancels the request alongside the adapter's own timeout. */
 export interface SearchProvider {
 	id: SearchEngineId;
-	search(query: string, count: number): Promise<SearchHit[]>;
+	search(query: string, count: number, signal?: AbortSignal): Promise<SearchHit[]>;
 }
 
 /** Why search is (un)available — the honest status the UI and the tool

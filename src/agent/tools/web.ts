@@ -1,6 +1,8 @@
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute } from "../tool-execute.ts";
+import { isServerMode } from "../../core/server-capabilities.ts";
+import { publicFetch } from "../public-fetch.ts";
 // The search-hit shape lives in the core port since the search wave
 // (2026-09-20); this alias keeps callers churn-free.
 import type { SearchHit as WebSearchResult, SearchProvider } from "../../core/search.ts";
@@ -41,21 +43,32 @@ const FETCH_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 /** Keep the researcher's context sane — long pages truncate with a marker. */
 const MAX_CONTENT_CHARS = 40_000;
+const TRUNCATION_MARKER = `\n\n[Truncated at ${MAX_CONTENT_CHARS} characters]`;
 const MIN_USEFUL_CONTENT = 200;
 
 const turndown = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" });
 
 function truncate(text: string): string {
 	if (text.length <= MAX_CONTENT_CHARS) return text;
-	return `${text.slice(0, MAX_CONTENT_CHARS)}\n\n[Truncated at ${MAX_CONTENT_CHARS} characters]`;
+	return text.slice(0, MAX_CONTENT_CHARS) + TRUNCATION_MARKER;
+}
+
+/** Preserve desktop's content-only truncation. The server's final bound
+ * includes titles, source metadata, errors and the truncation marker itself. */
+function capServerFetchOutput(text: string): string {
+	if (!isServerMode() || text.length <= MAX_CONTENT_CHARS) return text;
+	return text.slice(0, MAX_CONTENT_CHARS - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
 }
 
 /** Jina Reader fallback for JS-rendered pages (no deps — plain fetch). */
-async function fetchViaJina(url: string): Promise<string | null> {
+async function fetchViaJina(url: string, signal?: AbortSignal): Promise<string | null> {
+	// A reader fetches the target itself; local destination checks cannot
+	// constrain its redirects or connections. Never use it in server mode.
+	if (isServerMode()) return null;
 	try {
 		const res = await fetch(`https://r.jina.ai/${url}`, {
 			headers: { Accept: "text/markdown", "X-No-Cache": "true" },
-			signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+			signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)]) : AbortSignal.timeout(FETCH_TIMEOUT_MS),
 		});
 		if (!res.ok) return null;
 		const content = await res.text();
@@ -79,15 +92,21 @@ function htmlToMarkdown(html: string): { title: string; content: string } | null
 	return { title: article.title ?? "", content: markdown };
 }
 
-async function fetchAndExtract(url: string): Promise<string> {
-	const resp = await fetch(url, {
-		headers: {
-			"User-Agent": USER_AGENT,
-			Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-			"Accept-Language": "en-US,en;q=0.9",
-		},
-		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-	});
+async function fetchAndExtract(url: string, signal?: AbortSignal): Promise<string> {
+	const headers = {
+		"User-Agent": USER_AGENT,
+		Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+		"Accept-Language": "en-US,en;q=0.9",
+	};
+	let resp: Pick<Response, "ok" | "status" | "statusText" | "url" | "headers" | "text">;
+	if (isServerMode()) {
+		const bounded = await publicFetch(url, { headers, signal, maxBytes: MAX_RESPONSE_BYTES, timeoutMs: FETCH_TIMEOUT_MS, maxRedirects: 5 });
+		resp = { ...bounded, ok: bounded.status >= 200 && bounded.status < 300,
+			text: async () => new TextDecoder().decode(bounded.bytes) };
+	} else {
+		resp = await fetch(url, { headers,
+			signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)]) : AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+	}
 	if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
 
 	// Final URL after redirects + status — the researcher's only way to
@@ -116,7 +135,7 @@ async function fetchAndExtract(url: string): Promise<string> {
 		return header + truncate(extracted.content);
 	}
 	// Readability failed — likely JS-rendered. Try Jina Reader.
-	const jina = await fetchViaJina(url);
+	const jina = await fetchViaJina(url, signal);
 	if (jina) return truncate(jina);
 	throw new Error("Could not extract readable content (the page may be JavaScript-rendered)");
 }
@@ -142,7 +161,7 @@ export function createWebTools(search: () => SearchProvider | null): Record<stri
 			description: "Search the web. One search per call — use one call per search angle. " +
 				"Returns an array of results with title, url, and snippet.",
 			parameters: webSearchInput,
-			execute: serverExecute("web_search", webSearchInput, async ({ query, count }): Promise<WebSearchResult[] | string> => {
+			execute: serverExecute("web_search", webSearchInput, async ({ query, count }, { signal }): Promise<WebSearchResult[] | string> => {
 				const provider = search();
 				if (!provider) {
 					return (
@@ -151,7 +170,7 @@ export function createWebTools(search: () => SearchProvider | null): Record<stri
 					);
 				}
 				try {
-					return await provider.search(query, count ?? 5);
+					return await provider.search(query, count ?? 5, signal);
 				} catch (err) {
 					return `web_search failed: ${err instanceof Error ? err.message : String(err)}`;
 				}
@@ -163,9 +182,11 @@ export function createWebTools(search: () => SearchProvider | null): Record<stri
 			label: "web_fetch",
 			description:
 				"Fetch a web page and extract its readable content as markdown (Readability). " +
-				"Handles HTML pages and plain text; JS-rendered pages fall back to a reader service.",
+				(isServerMode()
+					? "Handles HTML pages and plain text at public destinations on standard HTTP(S) ports. No reader fallback; JavaScript-only pages may be unreadable."
+					: "Handles HTML pages and plain text; JS-rendered pages fall back to a reader service."),
 			parameters: webFetchInput,
-			execute: serverExecute("web_fetch", webFetchInput, async ({ url }): Promise<string> => {
+			execute: serverExecute("web_fetch", webFetchInput, async ({ url }, { signal }): Promise<string> => {
 				try {
 					const parsed = new URL(url);
 					// URL.protocol carries a TRAILING COLON ("https:", WHATWG) — the
@@ -175,12 +196,12 @@ export function createWebTools(search: () => SearchProvider | null): Record<stri
 					if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
 						throw new Error("Only http(s) URLs are supported");
 				} catch {
-					return `web_fetch failed: invalid URL "${url}"`;
+					return capServerFetchOutput(`web_fetch failed: invalid URL "${url}"`);
 				}
 				try {
-					return await fetchAndExtract(url);
+					return capServerFetchOutput(await fetchAndExtract(url, signal));
 				} catch (err) {
-					return `web_fetch failed for ${url}: ${err instanceof Error ? err.message : String(err)}`;
+					return capServerFetchOutput(`web_fetch failed for ${url}: ${err instanceof Error ? err.message : String(err)}`);
 				}
 			}),
 		},
