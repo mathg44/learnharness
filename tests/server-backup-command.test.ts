@@ -219,6 +219,27 @@ it("refuses backup roots that are shared, symlinked, missing, relative or inside
 	assert.deepEqual(t.calls(), []);
 });
 
+it("requires exactly mode 0700 for the backup root, without special bits", () => {
+	const t = setup();
+	try {
+		for (const mode of [0o300, 0o500, 0o1700, 0o2700, 0o4700]) {
+			fs.chmodSync(t.backups, mode);
+			const result = t.run("status", "--directory", t.backups);
+			assert.equal(result.status, 1);
+			assert.match(result.stderr, /^server-backup: BACKUP_ROOT_INVALID: /, mode.toString(8));
+		}
+	} finally { fs.chmodSync(t.backups, 0o700); }
+});
+
+it("refuses a backup root owned by another user", async () => {
+	const t = setup();
+	const uid = process.getuid;
+	try {
+		process.getuid = () => uid!() + 1;
+		await assert.rejects(backupStatus({ directory: t.backups }), (error: unknown) => (error as { code: string }).code === "BACKUP_ROOT_INVALID");
+	} finally { process.getuid = uid; }
+});
+
 it("refuses to run while another command holds the backup root", () => {
 	const t = setup();
 	fs.writeFileSync(path.join(t.backups, ".lock"), "12345\n");

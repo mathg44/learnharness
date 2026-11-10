@@ -50,7 +50,7 @@ async function validateRoot(directory) {
 	const stat = await fsp.lstat(resolved).catch(() => fail("BACKUP_ROOT_INVALID"));
 	if (!stat.isDirectory()) fail("BACKUP_ROOT_INVALID");
 	if ((await fsp.realpath(resolved)) !== resolved) fail("BACKUP_ROOT_INVALID");
-	if (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) fail("BACKUP_ROOT_INVALID");
+	if (stat.uid !== process.getuid() || (stat.mode & 0o7777) !== 0o700) fail("BACKUP_ROOT_INVALID");
 	const realCheckout = await fsp.realpath(checkout);
 	if (overlaps(resolved, realCheckout) || overlaps(resolved, DOCKER_ROOT)) fail("BACKUP_ROOT_INVALID");
 	return resolved;

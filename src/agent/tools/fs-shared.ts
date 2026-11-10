@@ -98,9 +98,10 @@ function isCredentialTemp(absolute: string, directory: string, authBasename: str
 	const file = comparisonPath(absolute);
 	if (path.relative(comparisonPath(directory), path.dirname(file)) !== "") return false;
 	const name = path.basename(file);
-	const prefix = `${authBasename}.tmp-`;
-	return CREDENTIAL_TEMP.test(name) ||
-		(name.toLowerCase().startsWith(prefix.toLowerCase()) && ATOMIC_TEMP_UUID.test(name.slice(prefix.length)));
+	return CREDENTIAL_TEMP.test(name) || [authBasename, ...SUBSCRIPTION_FILES].some((basename) => {
+		const prefix = `${basename}.tmp-`;
+		return name.toLowerCase().startsWith(prefix.toLowerCase()) && ATOMIC_TEMP_UUID.test(name.slice(prefix.length));
+	});
 }
 
 /** String-only check, also usable with synthetic home/credential locations.

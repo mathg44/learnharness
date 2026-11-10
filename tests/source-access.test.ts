@@ -45,7 +45,10 @@ await write("keyfiles/xai-credentials.json");
 await write("keyfiles/.auth.json.tmp-123");
 const uuid = "12345678-1234-4123-8123-123456789abc";
 const authTemp = await write(`keyfiles/custom-keys.json.tmp-${uuid}`);
-for (const name of ["chatgpt", "github-copilot", "xai"]) await write(`keyfiles/${name}-credentials.json.${uuid}.tmp`);
+for (const name of ["chatgpt", "github-copilot", "xai"]) {
+	await write(`keyfiles/${name}-credentials.json.${uuid}.tmp`);
+	await write(`keyfiles/${name}-credentials.json.tmp-${uuid}`);
+}
 const targetKey = await write("relocated-token");
 await link(path.join(root, "keyfiles"), path.join(root, "private"), true);
 await link(targetKey, auth);
@@ -89,12 +92,15 @@ describe("source access: configured credentials only", () => {
 			path.join(root, "keyfiles", `${name}-credentials.json`),
 			path.join(root, "private", `${name}-credentials.json.${uuid}.tmp`),
 			path.join(root, "keyfiles", `${name}-credentials.json.${uuid}.tmp`),
+			path.join(root, "private", `${name}-credentials.json.tmp-${uuid}`),
+			path.join(root, "keyfiles", `${name}-credentials.json.tmp-${uuid}`),
 		])),
 		path.join(root, "private", ".auth.json.tmp-123"), path.join(root, "keyfiles", ".auth.json.tmp-123"),
 	];
 	for (const file of protectedFiles) {
-		it(`refuses read and direct grep of ${path.relative(root, file)}`, async () => {
+		it(`refuses read, listing and direct grep of ${path.relative(root, file)}`, async () => {
 			await assert.rejects(readTool.execute!("s", { path: file }), denied);
+			await assert.rejects(lsTool.execute!("s", { path: file }), denied);
 			await assert.rejects(grepTool.execute!("s", { path: file, pattern: "LH_SYNTHETIC_SECRET_MARKER" }), denied);
 		});
 	}
