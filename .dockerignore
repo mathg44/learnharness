@@ -27,6 +27,8 @@
 !scripts/container/assemble.mjs
 !scripts/container/entrypoint.sh
 !scripts/container/healthcheck.mjs
+!scripts/egress/
+!scripts/egress/*.mjs
 # Defense against private files nested inside an allowed source directory.
 **/.env*
 **/auth.json
