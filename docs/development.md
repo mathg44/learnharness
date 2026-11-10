@@ -98,6 +98,7 @@ Additional runtime gates have prerequisites:
 
 | Check | Prerequisite / purpose |
 | --- | --- |
+| `bash scripts/check-container-egress.sh` | Linux Docker Engine with isolated dual-stack bridge support. Builds disposable app/guard/browser images and synthetic endpoints; checks outbound enforcement without live credentials. See [container verification](verification/27-container-egress.md). |
 | `node scripts/smoke-provider-runtime.mjs` | Fresh build; traced provider payload/runtime paths with fixtures. Also used during packaging. |
 | `node scripts/smoke-web-subscriptions.mjs` | Build, no dev server running; isolated synthetic connection checks, external traffic blocked. Briefly changes/restores a source mtime to exercise reload. |
 | `LH_TEST_CHROME=/path/to/chromium node scripts/smoke-session-attachments.mjs` | No other dev server in this checkout. Browser composer/recovery checks with synthetic files and intercepted application routes. This does not exercise real upload conversion or server restart. |

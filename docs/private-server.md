@@ -39,12 +39,12 @@ Some tools can reach host files, the LAN or other services, so on a server they 
 | Capability | Tools and jobs | Restored by |
 | --- | --- | --- |
 | `files` | `read`, `ls`, `find`, `grep`, `show_image` | #22 |
-| `research` | `research` job, `web_search`, `web_fetch` | #23, #27 |
-| `pdf` | `pdf` job, `web_fetch_pdf`, `pdf_info`, `pdf_extract`, `pdf_search`, `pdf_render` | #24, #27; local-path jobs also require file access |
+| `research` | `research` job, `web_search`, `web_fetch` | #23 public transport plus fresh #27 container enforcement |
+| `pdf` | `pdf` job, `web_fetch_pdf`, `pdf_info`, `pdf_extract`, `pdf_search`, `pdf_render` | #24 downloads plus fresh #27 enforcement; local-path jobs also require file access |
 | `demo` | `demo` job | #25 |
 | `visual` | `visual` job | #26 |
 
-All five checks return false today. Restoring a capability means changing its check in the PR that adds its protections. Deploying that image is the enablement step. There is no environment switch.
+Research and downloaded PDFs require a fresh, namespace-bound check from the [container firewall guard](container-egress.md). Without verified enforcement they stay unavailable. Files, demo and visual checks still return false. There is no environment switch that marks enforcement ready.
 
 While a capability is unavailable, the tool registries leave its tools out of what the model sees. Tool execution, job dispatch, the job runner (including jobs recovered after a restart) and the worker entrypoints each refuse it as well. The model gets `The "research" tool is not available on this server.` and jobs fail with a matching message. These checks apply whenever `LH_SERVER_MODE` is set at all.
 
@@ -52,7 +52,7 @@ Settings → Agent still shows switches for research, demo, visual and PDF. On t
 
 ### Research network rules (#23)
 
-Research is still unavailable. Its `ready()` returns false until #27 adds container egress protection. #23 adds the application-level rules that will apply once it is restored. Nothing switches them on at runtime. Tests mock readiness instead.
+Research requires both these application-level rules and #27's [verified container enforcement](container-egress.md). Missing or stale guard state keeps it unavailable; a Settings toggle cannot bypass that check.
 
 In server mode, page fetches and search requests go through `publicFetch` in [public-fetch.ts](../src/agent/public-fetch.ts). It always enforces these rules. Inference providers get no exception.
 
@@ -85,11 +85,11 @@ The transport enforces each endpoint's listed method. POST endpoints accept no q
 
 Server page-fetch output is capped at 40,000 characters for the complete result, including the title, source metadata, errors and truncation marker. The Jina Reader fallback for JavaScript-rendered pages is off in server mode, since that service fetches the target itself and the local checks can't constrain it. Such pages fail with an honest extraction error. Desktop and local development keep plain `fetch` and the Jina fallback.
 
-This is enforcement inside the app. No app-scoped firewall exists yet; that is #27. Research PDF downloads now reuse `publicFetch` under the rules below, but research and PDF runtime readiness still return false. File tools remain disabled. Upload material through the browser instead.
+These rules apply inside the app, independently of #27's container firewall. Research PDF downloads reuse `publicFetch` under the rules below. Research and downloaded-PDF runtime readiness depends on the live guard. File tools remain disabled. Upload local material through the browser instead.
 
 ### Research PDFs (#24)
 
-The researcher can download a PDF it finds online, inspect its page count, search its text and extract selected pages. Its brief keeps the source URL and page citations. It does not keep the original PDF as a document library. These protections are implemented but not enabled on the server until #27 supplies outbound enforcement.
+The researcher can download a PDF it finds online, inspect its page count, search its text and extract selected pages. Its brief keeps the source URL and page citations. It does not keep the original PDF as a document library. This requires #27's verified outbound enforcement.
 
 | Path | Enforcement |
 | --- | --- |
@@ -124,21 +124,25 @@ Keep a private environment file **outside the checkout** containing only:
 
 ```dotenv
 LH_SERVER_ORIGIN=https://your-server.your-tailnet.ts.net
+LH_EGRESS_POLICY_FILE=/absolute/private/path/egress.json
 ```
 
-No provider credential belongs in it or in a build argument. Configure models in Settings with the custom endpoint editor, as before.
+Prepare the private policy using the [container enforcement guide](container-egress.md#private-configuration). It must contain the separately approved inference exception, not a broad LAN or tailnet permission. No provider credential belongs in either file or in a build argument. Configure models in Settings with the custom endpoint editor, as before.
 
 ```bash
 export SERVER_ENV=/absolute/private/path/server.env
 
-docker build -t learnharness:server .
+docker compose --env-file "$SERVER_ENV" -p learnharness \
+  -f compose.yaml -f compose.server.yaml build egress app
 docker compose --env-file "$SERVER_ENV" -p learnharness \
   -f compose.yaml -f compose.server.yaml up -d --no-build --wait
 
 # Stop only this app. The named volumes remain.
 docker compose --env-file "$SERVER_ENV" -p learnharness \
-  -f compose.yaml -f compose.server.yaml stop
+  -f compose.yaml -f compose.server.yaml stop app egress
 ```
+
+For updates, stop and recreate both the app and its network guard together. Never recreate only the guard or fall back to the unrestricted base recipe. The [enforcement guide](container-egress.md#installation-and-replacement) covers pair recreation, inspection and removal.
 
 The project name `learnharness` fixes the volume names `learnharness_app-data` and `learnharness_app-auth`. Keep it stable and run one writer. Never use `down --volumes` on records you want to keep. The image is about 2.1 GB; check free disk space before building. Isolation settings (non-root, read-only root, dropped capabilities, tmpfs, loopback port) come from [compose.yaml](../compose.yaml) and are described in the [production container guide](production-container.md).
 
@@ -172,8 +176,8 @@ Check that it succeeded before restarting. Keep the previous image tagged before
 
 The trial ran as project `learnharness-trial` with image `learnharness:trial`, volumes `learnharness-trial_app-data` and `learnharness-trial_app-auth`, and an env file with `LH_SERVER_TRIAL_ORIGIN`. The new project gets new volumes, filled by a stopped-app copy. Nothing is deleted, and the trial stays restorable. Each step that stops, starts or changes the live service needs owner approval at the time.
 
-1. **Build the image while the trial runs.** `docker build -t learnharness:server .` from the reviewed checkout. Check disk space first.
-2. **Write the new env file.** Copy the origin value from the trial env file into a new private file as `LH_SERVER_ORIGIN=...`. Leave the trial file unchanged for rollback.
+1. **Build both images while the trial runs.** Use the build recipe above from the reviewed checkout after preparing the private environment and egress policy. Check disk space first.
+2. **Write the new env file.** Copy the origin value from the trial env file into a new private file as `LH_SERVER_ORIGIN=...`, and add `LH_EGRESS_POLICY_FILE`. Leave the trial file unchanged for rollback.
 3. **Check that the new volumes don't exist yet.** `docker volume ls --filter name=learnharness_app` must print no volumes. If it lists any, stop and find out why before going on.
 4. **Wait until idle.** No lesson reply streaming in any open tab. Through the Serve URL, `/api/activity` must show `"jobs":[]` and `"extractions":[]`.
 5. **Stop the trial.** `docker compose -p learnharness-trial stop`. This works without the removed `compose.trial.yaml`. Confirm with `docker compose -p learnharness-trial ps --all`, which should show the container exited. A manually stopped container stays stopped across Docker restarts.
@@ -233,6 +237,7 @@ The trial ran as project `learnharness-trial` with image `learnharness:trial`, v
 
 ## Verification
 
+- [Container enforcement](container-egress.md) and its [verification checklist](verification/27-container-egress.md) cover policy, live namespace-bound readiness, disposable IPv4/IPv6 endpoints, browser/subprocess traffic, guard failure and recreation.
 - `npm test` includes [server-access.test.ts](../tests/server-access.test.ts), [server-capabilities.test.ts](../tests/server-capabilities.test.ts) and [server-healthcheck.test.ts](../tests/server-healthcheck.test.ts).
 - [server-research-pdf.test.ts](../tests/server-research-pdf.test.ts) and [server-pdf-jobs.test.ts](../tests/server-pdf-jobs.test.ts) cover #24 downloads, text reading, native rendering, denial, cancellation, cleanup and research dispatch/recovery with synthetic engines and public HTTP sockets. [pdf-ops.test.ts](../tests/pdf-ops.test.ts) and [pdf-native-render.test.ts](../tests/pdf-native-render.test.ts) cover native page limits and cancellation.
 - [public-fetch.test.ts](../tests/public-fetch.test.ts), [server-search-fetch.test.ts](../tests/server-search-fetch.test.ts) and [server-research.test.ts](../tests/server-research.test.ts) cover the #23 rules, actual tool calls, research dispatch/recovery and pending session delivery. They use synthetic engines, controlled DNS and sockets, and real Node HTTP parsing. A disposable loopback listener also verifies rejection of a real mismatched socket peer before any HTTP bytes are sent. No live provider credentials are involved.

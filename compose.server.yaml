@@ -1,8 +1,51 @@
 # Private Tailscale server. Use with compose.yaml, project name "learnharness"
 # and an explicit private --env-file outside the checkout. See docs/private-server.md.
 services:
+  egress:
+    image: learnharness:egress
+    build:
+      context: .
+      target: egress
+    user: "0:0"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    stop_grace_period: 10s
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - type: bind
+        source: ${LH_EGRESS_POLICY_FILE:?Set an absolute private egress policy path}
+        target: /etc/learnharness/egress.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - egress-state:/run/lh-egress
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
   app:
     image: learnharness:server
+    network_mode: service:egress
+    # Publication belongs to the namespace owner, not its dependent.
+    ports: !reset []
+    depends_on:
+      egress:
+        condition: service_healthy
+        restart: true
     environment:
       LH_SERVER_MODE: tailscale
       LH_SERVER_ORIGIN: ${LH_SERVER_ORIGIN:?Set the Tailscale Serve HTTPS origin}
+    volumes:
+      - type: bind
+        source: ${LH_EGRESS_POLICY_FILE:?Set an absolute private egress policy path}
+        target: /etc/learnharness/egress.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - egress-state:/run/lh-egress:ro
+
+volumes:
+  egress-state:

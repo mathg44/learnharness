@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - [ ] Use this work branch with the lockfile's dependencies and Node 26. Use synthetic providers, synthetic PDFs and a disposable data/auth profile. Do not supply real keys or learner records.
-- [ ] Keep production research and PDF readiness disabled. This PR adds application protections; #27 must supply outbound enforcement before runtime enablement. Do not alter readiness checks, deploy or restart the live service to run this checklist.
+- [ ] Research and downloaded-PDF readiness requires #27's [verified container enforcement](27-container-egress.md). Without it these capabilities stay disabled. Do not bypass readiness, deploy or restart the live service to run this checklist.
 
 ## Automated checks
 
@@ -18,7 +18,7 @@
 
 ## Manual user verification after authorized enablement
 
-Entry point: the authenticated server's `/chat/new` page, accessed from the learner's laptop browser. These steps need a later approved deployment with #27's outbound restrictions, researcher model configuration, and a search engine key if testing discovery rather than a known source URL. They are not instructions to enable the feature in this PR.
+Entry point: the authenticated server's `/chat/new` page, accessed from the learner's laptop browser. These steps need a separately approved deployment with #27's outbound restrictions, researcher model configuration, and a search engine key if testing discovery rather than a known source URL. This checklist does not authorize deployment.
 
 - [ ] Open Settings from the sidebar, then Agent, and enable research. Start a lesson at `/chat/new` and ask the teacher to research a question whose authoritative source is a public PDF. Expect background research to acknowledge dispatch while the lesson continues.
 - [ ] When research finishes, expect a brief delivered to the same lesson with the PDF's source link and page citations. The researcher can search and extract PDF text; it does not visually interpret diagrams or scanned pages. It should report a reading limitation rather than invent content.
@@ -28,7 +28,7 @@ Entry point: the authenticated server's `/chat/new` page, accessed from the lear
 
 ## Operator checks
 
-- [ ] Before #27, verify `SERVER_CAPABILITIES.research.ready()` and `SERVER_CAPABILITIES.pdf.ready()` still return false. Settings must not bypass them.
+- [ ] Without a fresh enforcement adapter, verify `SERVER_CAPABILITIES.research.ready()` and `SERVER_CAPABILITIES.pdf.ready()` return false. Under #27 they may become ready only with valid guard state. Settings must not bypass the check.
 - [ ] After an authorized synthetic research run, inspect only that run's temporary storage. Expect its private `lh-research-*` directory to be removed, with no original PDF copied into chat/job records or persistent document storage. Findings and source references remain in the result.
 - [ ] If the process died abruptly, treat any remaining copies as private temporary data. They are not reused on recovery and have no automatic expiry. Under the approved maintenance procedure, stopping/starting or recreating the container clears its `/tmp` tmpfs. Do not delete unrelated host `/tmp` files or restart the live service without authorization.
 
