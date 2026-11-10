@@ -57,6 +57,7 @@ function runWithAbortGuard<T>(
 	toolName: string,
 	run: (signal: AbortSignal) => T | Promise<T>,
 	parent: AbortSignal | undefined,
+	timeoutMs = toolTimeoutMs.current,
 ): Promise<T> {
 	const controller = new AbortController();
 	const forwardAbort = () => controller.abort();
@@ -64,7 +65,6 @@ function runWithAbortGuard<T>(
 		if (parent.aborted) controller.abort();
 		else parent.addEventListener("abort", forwardAbort, { once: true });
 	}
-	const timeoutMs = toolTimeoutMs.current;
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	const humanTimeout = timeoutMs >= 1_000 ? `${Math.round(timeoutMs / 1000)}s` : `${timeoutMs}ms`;
 	let graceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -216,6 +216,8 @@ export function serverExecute<P extends TSchema>(
 	toolName: string,
 	schema: P,
 	run: (input: Static<P>, ctx: ToolExecuteContext) => unknown,
+	/** Trusted per-tool ceiling. Omitted tools keep the shared 30-second guard. */
+	timeoutMs?: number,
 ): AgentTool<any>["execute"] {
 	// The returned execute is deliberately typed loose (params: unknown) so
 	// it satisfies every AgentTool slot — heterogeneous registries type
@@ -228,7 +230,7 @@ export function serverExecute<P extends TSchema>(
 		const blocked = serverToolBlockReason(toolName);
 		if (blocked) return toolDisabledResult(toolName, blocked);
 		return toToolResult(
-			await runWithAbortGuard(toolName, (toolSignal) => run(input as Static<P>, { toolCallId, signal: toolSignal }), signal),
+			await runWithAbortGuard(toolName, (toolSignal) => run(input as Static<P>, { toolCallId, signal: toolSignal }), signal, timeoutMs),
 		);
 	};
 }

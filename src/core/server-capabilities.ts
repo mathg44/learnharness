@@ -26,7 +26,8 @@ export const SERVER_CAPABILITIES: Readonly<Record<ServerCapability, CapabilityDe
 	files: { tools: ["read", "ls", "find", "grep", "show_image"], jobKinds: [], ready: () => false },
 	// #23: public-only destination enforcement; #27: container egress.
 	research: { tools: ["research", "web_search", "web_fetch"], jobKinds: ["research"], ready: () => false },
-	// #24: public fetch for remote PDFs, app-owned download storage.
+	// #24: public-only research PDFs and job-owned temporary downloads.
+	// #27 still owns runtime readiness. Local-path PDF jobs also need files.
 	pdf: {
 		tools: ["pdf", "web_fetch_pdf", "pdf_info", "pdf_extract", "pdf_search", "pdf_render"],
 		jobKinds: ["pdf"],
@@ -56,13 +57,15 @@ export function isServerCapabilityAvailable(capability: ServerCapability): boole
 
 export function serverToolBlockReason(toolName: string): string | null {
 	const capability = TOOL_CAPABILITY.get(toolName);
-	if (!capability || isServerCapabilityAvailable(capability)) return null;
+	const localPdfBlocked = toolName === "pdf" && !isServerCapabilityAvailable("files");
+	if ((!capability || isServerCapabilityAvailable(capability)) && !localPdfBlocked) return null;
 	return `The "${toolName}" tool is not available on this server.`;
 }
 
 export function serverJobBlockReason(kind: string): string | null {
 	const capability = JOB_CAPABILITY.get(kind);
-	if (!capability || isServerCapabilityAvailable(capability)) return null;
+	const localPdfBlocked = kind === "pdf" && !isServerCapabilityAvailable("files");
+	if ((!capability || isServerCapabilityAvailable(capability)) && !localPdfBlocked) return null;
 	return `The "${kind}" job is not available on this server.`;
 }
 

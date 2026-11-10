@@ -40,7 +40,7 @@ Some tools can reach host files, the LAN or other services, so on a server they 
 | --- | --- | --- |
 | `files` | `read`, `ls`, `find`, `grep`, `show_image` | #22 |
 | `research` | `research` job, `web_search`, `web_fetch` | #23, #27 |
-| `pdf` | `pdf` job, `web_fetch_pdf`, `pdf_info`, `pdf_extract`, `pdf_search`, `pdf_render` | #24 |
+| `pdf` | `pdf` job, `web_fetch_pdf`, `pdf_info`, `pdf_extract`, `pdf_search`, `pdf_render` | #24, #27; local-path jobs also require file access |
 | `demo` | `demo` job | #25 |
 | `visual` | `visual` job | #26 |
 
@@ -85,7 +85,36 @@ The transport enforces each endpoint's listed method. POST endpoints accept no q
 
 Server page-fetch output is capped at 40,000 characters for the complete result, including the title, source metadata, errors and truncation marker. The Jina Reader fallback for JavaScript-rendered pages is off in server mode, since that service fetches the target itself and the local checks can't constrain it. Such pages fail with an honest extraction error. Desktop and local development keep plain `fetch` and the Jina fallback.
 
-This is enforcement inside the app. No app-scoped firewall exists yet; that is #27. Remote PDF downloads and the PDF tools stay disabled under #24, which is expected to reuse `publicFetch` for downloads. File tools stay disabled under #22, which is deferred. Upload material through the browser instead.
+This is enforcement inside the app. No app-scoped firewall exists yet; that is #27. Research PDF downloads now reuse `publicFetch` under the rules below, but research and PDF runtime readiness still return false. File tools remain disabled. Upload material through the browser instead.
+
+### Research PDFs (#24)
+
+The researcher can download a PDF it finds online, inspect its page count, search its text and extract selected pages. Its brief keeps the source URL and page citations. It does not keep the original PDF as a document library. These protections are implemented but not enabled on the server until #27 supplies outbound enforcement.
+
+| Path | Enforcement |
+| --- | --- |
+| `web_fetch` → PDF notice | Server page requests use #23's public transport and 5 MiB ceiling. A recognized PDF response points to `web_fetch_pdf`. |
+| Researcher's `web_fetch_pdf` | Uses `publicFetch`, with the same URL, DNS, connected-peer, redirect and header rules as page fetching. No private service or configured inference proxy is an exception. |
+| `pdf_info`, `pdf_extract`, `pdf_search` | Reopen only files downloaded by that research job. Canonical containment and the mandatory sensitive-path guard still apply. Pre-existing files, symlink escapes and paths from another job are refused. |
+| Native inspection, text extraction, search and page rendering | Use pdfjs and Skia, not Chrome or a remote reader. No embedded PDF link is fetched. Open documents and pages are released on success, failure and cancellation. |
+| Teacher's local-path `pdf` job | Remains unavailable without file capability readiness, even if research PDF readiness is restored. Direct worker invocation and recovered jobs obey the same check. No learner filesystem roots are added here. |
+| Browser session uploads and graph PDF imports | Separate uploaded-byte transcription flows. Their models, role selection, usage accounting and stored transcriptions are unchanged. |
+
+Server research PDF limits are fixed by the app, not model-selected arguments:
+
+- 25 MiB of received HTTP bytes across all redirect hops and, independently, 25 MiB of decompressed body. HTTP headers and framing count toward the transfer budget.
+- Five redirects and a 60-second download deadline across DNS, connection and body consumption. The enclosing download tool also has a 60-second guard including validation and triage. Other PDF text tools keep the shared 30-second guard.
+- 1,000 pages, checked before inspecting or extracting pages. At most four successful downloads per research job, with pending downloads reserving a slot. Failed attempts release their slot.
+- 40,000 characters per tool result, including JSON metadata and the truncation marker. Oversized structured results become a truncated text result; narrow the page selection or search.
+- Native page rendering keeps the 16-megapixel and 8192-pixel-side limits. The researcher remains text-only and does not gain a vision model or `pdf_render` tool.
+
+The runner creates a private `lh-research-*` directory under the OS temporary directory for each job. Download files have mode `0600`; directories created with `mkdtemp` have mode `0700`. The model receives a job-relative filename rather than a host path. Files are created exclusively. A failed download or validation removes its copy immediately. If that removal fails, the tool returns a safe cleanup error and the job's final directory removal still runs. Job completion, failure and cancellation remove the entire directory.
+
+An abrupt process death can leave temporary copies until the container's `/tmp` tmpfs is cleared by stop/start or recreation. There is no retained-file index or automatic orphan sweep. Recovery reruns research with a new temporary directory and downloads fresh copies; it never reuses an old path. Keep one server owner per profile as documented above.
+
+Cancellation reaches requests, file writes and PDF operations. PDF parsing and rendering are in-process, not an OS sandbox: a synchronous parser or canvas step must return before cancellation can take effect. The page and canvas limits are not a hard CPU or total-memory limit. Server tool errors omit request credentials, response bodies, parser diagnostics and private filesystem paths. Desktop keeps its existing fetch behavior and diagnostics.
+
+See the [verification checklist](verification/24-research-pdfs.md).
 
 Still available on the server: teaching, probing, practice, mathematics, the knowledge graph, uploaded-note imports (including page-by-page PDF transcription with the PDF-reader model), and browser session attachments. Session attachments are explicit uploads and do not enable file tools. See [session attachments](getting-started.md#attach-material-to-a-session).
 
@@ -205,5 +234,6 @@ The trial ran as project `learnharness-trial` with image `learnharness:trial`, v
 ## Verification
 
 - `npm test` includes [server-access.test.ts](../tests/server-access.test.ts), [server-capabilities.test.ts](../tests/server-capabilities.test.ts) and [server-healthcheck.test.ts](../tests/server-healthcheck.test.ts).
+- [server-research-pdf.test.ts](../tests/server-research-pdf.test.ts) and [server-pdf-jobs.test.ts](../tests/server-pdf-jobs.test.ts) cover #24 downloads, text reading, native rendering, denial, cancellation, cleanup and research dispatch/recovery with synthetic engines and public HTTP sockets. [pdf-ops.test.ts](../tests/pdf-ops.test.ts) and [pdf-native-render.test.ts](../tests/pdf-native-render.test.ts) cover native page limits and cancellation.
 - [public-fetch.test.ts](../tests/public-fetch.test.ts), [server-search-fetch.test.ts](../tests/server-search-fetch.test.ts) and [server-research.test.ts](../tests/server-research.test.ts) cover the #23 rules, actual tool calls, research dispatch/recovery and pending session delivery. They use synthetic engines, controlled DNS and sockets, and real Node HTTP parsing. A disposable loopback listener also verifies rejection of a real mismatched socket peer before any HTTP bytes are sent. No live provider credentials are involved.
 - [scripts/smoke-server-access-runtime.mjs](../scripts/smoke-server-access-runtime.mjs) builds the production standalone server in a disposable copy. It then sends accepted and rejected requests to pages, chats, uploads, image routes, provider and settings writes, the chat and events streams, and the health check. It covers server mode, misconfigured server mode and normal mode. Its header explains how to make the copy. It uses a synthetic provider that only answers model discovery.
