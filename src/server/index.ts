@@ -4,6 +4,10 @@
  * here; nothing under app/ touches src/store or src/agent directly.
  */
 
+// Bootstrap process-wide protections before exported services can recover work.
+// Storage adapters remain independent of network-readiness installation.
+import "./egress.ts";
+
 export * from "./chat-handler.ts";
 export * from "./events-stream.ts";
 export * from "./chats.ts";

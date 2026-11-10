@@ -6,12 +6,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { checkDockerResolver, parsePolicy } from "./policy.mjs";
+import { checkDockerResolver, LEASE_SECONDS, parsePolicy } from "./policy.mjs";
 
 export const DEFAULT_POLICY_PATH = "/etc/learnharness/egress.json";
 export const DEFAULT_STATUS_PATH = "/run/lh-egress/status.json";
 export const REFRESH_MS = 1000;
-export const LEASE_MS = 5000;
+export const LEASE_MS = LEASE_SECONDS * 1000;
 
 /**
  * @typedef {{ version: 1, profile: "app" | "browser", bootId: string, namespace: string, policyHash: string,

@@ -6,7 +6,6 @@
  * file (and the adapter implementations in src/store/).
  */
 
-import "./egress.ts";
 import { chatStore } from "../store/chats.ts";
 import { graphStore } from "../store/graph.ts";
 import { sourceOrganizationStore } from "../store/source-organization.ts";
