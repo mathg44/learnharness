@@ -128,6 +128,9 @@ export const SETTINGS_FILE = path.join(DATA_ROOT, "settings.json");
  */
 export const PROMPTS_OVERRIDE_DIR = path.join(DATA_ROOT, "prompts");
 
+/** Private transient capture, never a learner source. Final backups live on the host. */
+export const BACKUP_STAGING_DIR = "/tmp/learnharness-backup";
+
 /**
  * THE AUTH/KEY STORE (auth-keys wave, 2026-09-19): BYOK provider keys in a
  * flat {VAR: value} JSON map — the SAME file the Electron app has always

@@ -1,0 +1,11 @@
+# Template. Runs learnharness-backup.service daily at 03:00 server-local time,
+# and once at boot if the machine was off at 03:00. Not installed by anything.
+[Unit]
+Description=Daily LearnHarness private server snapshot
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

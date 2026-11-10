@@ -9,6 +9,7 @@
 !postcss.config.mjs
 !config.ts
 !proxy.ts
+!instrumentation.ts
 !LICENSE
 !app/
 !app/**
@@ -27,6 +28,9 @@
 !scripts/container/assemble.mjs
 !scripts/container/entrypoint.sh
 !scripts/container/healthcheck.mjs
+!scripts/backup/
+!scripts/backup/profile.cjs
+!scripts/backup/export.mjs
 !scripts/egress/
 !scripts/egress/*.mjs
 # Defense against private files nested inside an allowed source directory.
