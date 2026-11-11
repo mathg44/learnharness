@@ -35,7 +35,8 @@ const fail = (code) => {
 };
 
 const checkout = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
-// Docker keeps volumes and images here; a release inside it could be pruned with them.
+// Docker's default data root, refused even when the daemon reports another one.
+// A release inside it could be pruned with images and volumes.
 const DOCKER_ROOT = "/var/lib/docker";
 const overlaps = (a, b) => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep);
 const realOrSame = (file) => fsp.realpath(file).catch(() => path.resolve(file));
@@ -49,6 +50,18 @@ async function validateRoot(directory, avoid) {
 	if (stat.uid !== process.getuid() || (stat.mode & 0o7777) !== 0o700) fail("RELEASE_ROOT_INVALID");
 	await checkClear(resolved, [checkout, DOCKER_ROOT, ...avoid]);
 	return resolved;
+}
+
+/**
+ * Where the daemon actually keeps images and volumes. It may be relocated, so
+ * the default above is not enough. Any doubt about the answer fails closed.
+ */
+async function dockerRoot(bin) {
+	const result = await exec(bin, ["info", "--format", "{{.DockerRootDir}}"]);
+	if (result.status !== 0) fail("DOCKER_FAILED");
+	const root = result.text.endsWith("\n") ? result.text.slice(0, -1) : result.text;
+	if (!root || /[\n\r\0]/.test(root) || !path.isAbsolute(root) || path.normalize(root) !== root) fail("DOCKER_FAILED");
+	return root;
 }
 
 async function checkClear(root, trees) {
@@ -388,7 +401,7 @@ export async function preserveRelease({ snapshot, revision, directory, project =
 	for (const file of ["compose.yaml", "compose.server.yaml"]) {
 		if (!(await blob(file)).equals(await fsp.readFile(path.join(snapshotDir, "config", file)))) fail("SOURCE_MISMATCH");
 	}
-	const root = await validateRoot(directory, [top, path.dirname(snapshotDir)]);
+	const root = await validateRoot(directory, [top, path.dirname(snapshotDir), await dockerRoot(bin)]);
 	return withLock(root, () => preserveLocked({ root, bin, project, revision, now, git, snapshotDir, meta, seccompSource }));
 }
 
@@ -413,6 +426,7 @@ async function preserveLocked({ root, bin, project, revision, now, git, snapshot
 	const staging = path.join(root, `.partial-${crypto.randomUUID()}`);
 	const published = path.join(root, `release-${stamp}-${short}-${crypto.randomBytes(4).toString("hex")}`);
 	let tagged = [];
+	let renamed = false;
 	await fsp.mkdir(staging, { mode: 0o700 });
 	try {
 		for (const file of RECIPES) await writeStream(path.join(staging, file), fs.createReadStream(path.join(snapshotDir, "config", file)));
@@ -451,12 +465,36 @@ async function preserveLocked({ root, bin, project, revision, now, git, snapshot
 		// Under the lock no one else publishes here, so an absent name stays absent until the rename.
 		if (await fsp.lstat(published).then(() => true, () => false)) fail("INTERNAL");
 		await fsp.rename(staging, published);
+		renamed = true;
 		await fsyncDirectory(root);
 		return summary(published, release);
 	} catch (error) {
-		await fsp.rm(staging, { recursive: true, force: true });
-		if (tagged.length) await removeTags(bin, tagged);
+		// Withdraw the directory first, so no release outlives its tags. If that
+		// fails the tags stay, keeping whatever is left complete for the owner to review.
+		let cleanupFailed = false;
+		if (renamed) cleanupFailed = !(await withdraw(root, published));
+		else await fsp.rm(staging, { recursive: true, force: true });
+		if (tagged.length && !cleanupFailed) {
+			try {
+				await removeTags(bin, tagged);
+			} catch {
+				cleanupFailed = true;
+			}
+		}
+		if (cleanupFailed) fail("RELEASE_CLEANUP_FAILED");
 		throw error;
+	}
+}
+
+/** Moves a published release out of the release namespace, then deletes it. Returns whether both worked. */
+async function withdraw(root, published) {
+	const doomed = path.join(root, `.partial-delete-${crypto.randomUUID()}`);
+	try {
+		await fsp.rename(published, doomed);
+		await fsp.rm(doomed, { recursive: true, force: true });
+		return true;
+	} catch {
+		return false;
 	}
 }
 
@@ -522,7 +560,7 @@ export async function verifyRelease(release, { docker: bin = "docker", now = () 
 	if (typeof release !== "string") fail("RELEASE_INVALID");
 	const directory = path.resolve(release);
 	if (!RELEASE_NAME.test(path.basename(directory))) fail("RELEASE_INVALID");
-	await validateRoot(path.dirname(directory), []);
+	await validateRoot(path.dirname(directory), [await dockerRoot(bin)]);
 	const meta = await verifyFiles(directory);
 	for (const service of SERVICES) {
 		const { id, tag } = meta.images[service];

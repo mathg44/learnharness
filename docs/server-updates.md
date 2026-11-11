@@ -8,6 +8,7 @@ This procedure is for the single-profile [private installation](private-server.m
 
 - Linux Docker Engine and Compose, Git, Bash and Node 22 or newer on the operator host. Application checks use the pinned Node 26 runtime.
 - A clean, committed previous-source checkout and candidate-source checkout. Know which source produced the installed images. Do not infer that from the current branch or the app's package version.
+- Keep an approved tooling checkout containing `scripts/server-release.mjs` and `scripts/server-backup.mjs` available throughout the rollback window. Set `TOOLING_CHECKOUT` to its absolute path. The preserved `source.tar` is an archive, not an already extracted tooling checkout. Set `PRIVATE_DIR` to an existing operator-owned `0700` maintenance directory outside checkouts, build contexts and mounted materials.
 - The existing private env file, egress policy and approved materials folder. Keep them, release records and backup directories outside checkouts and build contexts.
 - A private release root owned by the operator, mode `0700`. For example, create `/var/lib/learnharness-releases` with the same ownership discipline as the [backup root](backups.md#prerequisites). It must not overlap backups, Docker storage or any service mount.
 - Enough space for both image sets, a consistent profile snapshot and disposable verification volumes. Never use global Docker prune to make room.
@@ -180,22 +181,64 @@ The rollback window ends at the preserved pre-update snapshot's `protectedUntil`
 A failed replacement can return to the previous images and pre-update data only with approval. Do not assume an older image can read the candidate's modified volumes.
 
 1. Stop the failed app, guard and demo together using the candidate command's exact file list. Keep the candidate data/auth volumes intact for diagnosis.
-2. Verify the preserved release and restore its copied snapshot with the backup CLI. Restore creates new `lh-restore-*` volumes and never writes the current ones.
-3. Check those new volumes with the recorded previous app image and `--network none`, as described in [Checking a restored copy](backups.md#checking-a-restored-copy). Compare real conversations, attachment/image routes, graph, settings, prompts, jobs and provider bindings through app reads. Do not call a model.
-4. Prepare a private recovery env file containing the recorded `LH_SERVER_ORIGIN` and an absolute `LH_EGRESS_POLICY_FILE` pointing to the preserved policy copy. Do not blindly reuse a mutable external policy or source an env file as shell code.
-5. Prepare a private volumes override naming the newly restored volumes:
+2. Verify the preserved release, derive its copied snapshot path and restore it with the approved tooling checkout. Run the following in Bash with the variables above set. `set -e` stops on failure, and `noclobber` refuses an existing result file. Restore creates new `lh-restore-*` volumes and never writes the current ones.
 
-   ```yaml
-   volumes:
-     app-data:
-       external: true
-       name: <restored-data-volume>
-     app-auth:
-       external: true
-       name: <restored-auth-volume>
+   ```bash
+   set -euo pipefail
+   node "$TOOLING_CHECKOUT/scripts/server-release.mjs" verify "$PREVIOUS_RELEASE"
+   PRESERVED_SNAPSHOT=$(node --input-type=module - "$PREVIOUS_RELEASE" <<'NODE'
+   import fs from "node:fs";
+   import path from "node:path";
+   const release = process.argv[2];
+   const meta = JSON.parse(fs.readFileSync(path.join(release, "release.json"), "utf8"));
+   if (!/^pre-update-\d{8}T\d{6}Z-[0-9a-f]{8}$/.test(meta.snapshot.name)) process.exit(1);
+   process.stdout.write(path.join(release, "snapshot", meta.snapshot.name));
+   NODE
+   )
+   node "$TOOLING_CHECKOUT/scripts/server-backup.mjs" verify "$PRESERVED_SNAPSHOT"
+   RESTORE_RESULT="$PRIVATE_DIR/restore.json"
+   (
+     umask 077
+     set -o noclobber
+     node "$TOOLING_CHECKOUT/scripts/server-backup.mjs" restore "$PRESERVED_SNAPSHOT" \
+       > "$RESTORE_RESULT"
+   )
    ```
 
-6. Use the preserved recipes, seccomp and image override, plus the recovery env and volumes override. Inspect the merged configuration privately before starting. Keep the original Compose project and URL:
+3. Check the new volumes named in the private `RESTORE_RESULT` file with its recorded `imageId` and `--network none`, as described in [Checking a restored copy](backups.md#checking-a-restored-copy). Compare real conversations, attachment/image routes, graph, settings, prompts, jobs and provider bindings through app reads. Do not call a model.
+4. Generate a private recovery env file from the recorded origin and retained policy, and a volumes override from the restore result. Both outputs refuse overwriting an existing file. Do not reuse a mutable external policy or source an env file as shell code.
+
+   ```bash
+   RECOVERY_ENV="$PRIVATE_DIR/recovery.env"
+   RECOVERY_VOLUMES_OVERRIDE="$PRIVATE_DIR/recovery-volumes.override.yaml"
+   node --input-type=module - "$PREVIOUS_RELEASE" "$PRESERVED_SNAPSHOT" \
+     "$RESTORE_RESULT" "$RECOVERY_ENV" "$RECOVERY_VOLUMES_OVERRIDE" <<'NODE'
+   import fs from "node:fs";
+   import path from "node:path";
+   try {
+     const [release, snapshot, resultFile, envFile, volumesFile] = process.argv.slice(2);
+     const runtime = JSON.parse(fs.readFileSync(path.join(snapshot, "runtime.json"), "utf8"));
+     const { volumes } = JSON.parse(fs.readFileSync(resultFile, "utf8"));
+     const data = /^lh-restore-([0-9a-f-]{36})-data$/.exec(volumes.data);
+     if (!data || volumes.auth !== `lh-restore-${data[1]}-auth`) throw new Error();
+     const origin = runtime.env.findLast(value => value.startsWith("LH_SERVER_ORIGIN="))?.slice(17);
+     if (!origin || new URL(origin).protocol !== "https:" || new URL(origin).origin !== origin) throw new Error();
+     const policy = path.join(release, "egress.json");
+     if (/['\r\n$]/.test(policy)) throw new Error();
+     const options = { mode: 0o600, flag: "wx" };
+     fs.writeFileSync(envFile, `LH_SERVER_ORIGIN=${origin}\nLH_EGRESS_POLICY_FILE='${policy}'\n`, options);
+     fs.writeFileSync(volumesFile, JSON.stringify({ volumes: {
+       "app-data": { external: true, name: volumes.data },
+       "app-auth": { external: true, name: volumes.auth },
+     } }, null, 2) + "\n", options);
+   } catch {
+     console.error("Recovery files could not be prepared. Inspect the private inputs.");
+     process.exit(1);
+   }
+   NODE
+   ```
+
+5. Use the preserved recipes, seccomp and image override, plus the recovery env and volumes override. Inspect the merged configuration privately before starting. Keep the original Compose project and URL:
 
    ```bash
    docker compose --project-directory "$PREVIOUS_RELEASE" \
@@ -208,8 +251,8 @@ A failed replacement can return to the previous images and pre-update data only 
      up -d --no-build --force-recreate --wait egress demo app
    ```
 
-   `PRESERVED_SNAPSHOT` is the copied snapshot inside the release. The approved materials folder remains an external read-only dependency; it is not included in profile backups. The guard and demo socket state are recreated, not restored as readiness evidence.
-7. Verify the installed old image IDs, app reads, access protections, readiness and backup operation again. Update the private deployment records and backup-service paths to the actual recovery recipes/configuration. Do not delete failed-candidate volumes or recovery material as part of this procedure.
+   The approved materials folder remains an external read-only dependency; it is not included in profile backups. The guard and demo socket state are recreated, not restored as readiness evidence.
+6. Verify the installed old image IDs, app reads, access protections, readiness and backup operation again. Update the private deployment records and backup-service paths to the actual recovery recipes/configuration. Do not delete failed-candidate volumes or recovery material as part of this procedure.
 
 Record the promoted storage layout in the private deployment notes. On the next update, preservation verifies the actual data/auth volume names against the new snapshot and running mounts, retains the mapping and checks the reconstructed Compose hashes. Other unexplained overrides still stop preservation.
 
@@ -221,7 +264,7 @@ Stop and obtain the owner's recovery decision. Preserve the current data/auth vo
 
 Run `node scripts/server-release.mjs verify "$PREVIOUS_RELEASE"` before relying on a release. It checks retained files, the copied snapshot, local image IDs, tag bindings and the original deadline. A snapshot manifest is not an authenticity signature. Protect the release directory as carefully as credentials.
 
-The release record stores image IDs and retention tags, not `docker save` archives. It survives ordinary untagged-image cleanup, not disk/server loss or a forced deletion of those images. Never prune globally. No helper automatically deletes release directories, image tags or current volumes. Backup rotation does not visit the copied snapshot inside a release: its credentials and learner records remain there after the deadline until the owner removes the release. Cleanup after the rollback deadline is a separate operator decision.
+The release record stores image IDs and retention tags, not `docker save` archives. It survives ordinary untagged-image cleanup, not disk/server loss or a forced deletion of those images. Never prune globally. No helper ages out successfully retained releases or their image tags, and none deletes current volumes. Failed preservation cleans only its own staging or failed publication and newly created tags. Backup rotation does not visit the copied snapshot inside a release: its credentials and learner records remain there after the deadline until the owner removes the release. Cleanup after the rollback deadline is a separate operator decision.
 
 CLI success prints JSON. Errors are fixed `server-release: CODE: message` diagnostics without Docker output, learner records or env contents. Usage errors exit 2; operational failures exit 1. Missing/mismatched images, changed files, unsafe directories, configuration mismatches, an existing retention tag or an expired snapshot all stop the workflow. A failed cleanup requires inspecting only that run's partial artifacts. Do not retry by disabling validation.
 

@@ -70,6 +70,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
 	CONTAINER_SCRIPT, CUSTOM_BASE, LOGIN, MODEL, ORIGIN, SEED_SCRIPT, projection, readRequests, syntheticProfile,
 } from "./backup/check-fixture.mjs";
+import { APP_CACHE, CHILD_ENV, HARDENED, isolated, serverCheckEnv } from "./backup/check-runtime.mjs";
 
 const USAGE = "Usage: node scripts/check-server-updates.mjs PREVIOUS_IMAGE CANDIDATE_IMAGE   (explicit local disposable image tags)";
 const args = process.argv.slice(2);
@@ -102,17 +103,8 @@ const LABEL = `${RUN_LABEL}=${run}`;
 const RESTORE_LABEL = "learnharness.restore";
 const POLICY_TARGET = "/etc/learnharness/egress.json";
 const CANDIDATE_FOLDER = "candidate-only";
-const SOURCE_ENV = ["LH_SERVER_MODE=tailscale", `LH_SERVER_ORIGIN=${ORIGIN}`, "LH_DATA_DIR=/data", "LH_AUTH_FILE=/auth/auth.json", "LH_IGNORE_ENV_KEYS=1"];
-const HARDENED = [
-	"--pull", "never", "--network", "none", "--read-only", "--user", "1000:1000",
-	"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-	"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777",
-];
-const APP_CACHE = ["--tmpfs", "/app/.next/cache:rw,noexec,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700"];
+const SOURCE_ENV = serverCheckEnv(ORIGIN);
 const CONFIG = JSON.stringify({ origin: ORIGIN, login: LOGIN, port: 3000, customBase: CUSTOM_BASE, model: MODEL });
-// Docker and the CLI see only what they need to reach the daemon, never provider variables.
-const CHILD_ENV = Object.fromEntries(["PATH", "HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY"]
-	.filter((name) => process.env[name] !== undefined).map((name) => [name, process.env[name]]));
 
 const owned = { containers: [], volumes: [], restoreVolumes: [], children: new Set() };
 const evidence = { run, startedAt: new Date().toISOString(), checks: [], counts: {}, candidate: "not-run", rollback: "not-run" };
@@ -262,16 +254,6 @@ async function stopApp(name) {
 	expect(!(await inspect("container", name)).State.Running, `${name} stopped`);
 }
 
-/** The container really has no network, no host ports, no extra privileges and no Docker socket. */
-function isolated(info) {
-	const host = info.HostConfig;
-	return host.NetworkMode === "none"
-		&& Object.keys(info.NetworkSettings?.Networks ?? {}).every((network) => network === "none")
-		&& Object.keys(host.PortBindings ?? {}).length === 0 && !host.PublishAllPorts
-		&& host.ReadonlyRootfs === true && host.CapDrop?.includes("ALL") && !(host.CapAdd?.length)
-		&& host.SecurityOpt?.includes("no-new-privileges") && info.Config.User === "1000:1000" && !host.Privileged
-		&& info.Mounts.every((mount) => !String(mount.Source).includes("docker.sock"));
-}
 /** Exactly the two volumes read-write and the policy read-only, nothing else. */
 function exactMounts(info, volumes, policyFile) {
 	const actual = info.Mounts.map((mount) => [mount.Destination, mount.Type, mount.Type === "volume" ? mount.Name : mount.Source, mount.RW]).sort();

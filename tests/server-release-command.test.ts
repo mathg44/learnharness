@@ -48,7 +48,8 @@ let answer = candidates.find((a) => !a.match || args.join(" ").includes(a.match)
 const resolve = (ref) => state.tags[ref] ?? (plan.images ?? []).find((id) => id === ref);
 if (!answer) {
 	answer = { status: 0, stdout: "" };
-	if (key === "image ls") answer.stdout = resolve(value("reference=")) ? resolve(value("reference=")) + "\\n" : "";
+	if (key === "info") answer.stdout = "/srv/docker-root\\n";
+	else if (key === "image ls") answer.stdout = resolve(value("reference=")) ? resolve(value("reference=")) + "\\n" : "";
 	else if (key === "image inspect") {
 		const id = resolve(args.at(-1));
 		answer = id ? { stdout: id + "\\n" } : { status: 1, stderr: "Error: No such image" };
@@ -333,7 +334,7 @@ it("verify requires every recorded image locally and every retention tag still n
 	result = t.run(["verify", release.release]);
 	assert.match(result.stderr, /^server-release: IMAGE_MISSING: /);
 	// verify only reads.
-	assert.deepEqual([...new Set(t.calls().slice(before).map((call) => call.args.slice(0, 2).join(" ")))], ["image inspect"]);
+	assert.deepEqual([...new Set(t.calls().slice(before).map((call) => call.args.slice(0, 2).join(" ")))].sort(), ["image inspect", "info --format"]);
 });
 
 it("keeps the snapshot's original deadline and reports the release expired once it passes", async () => {
@@ -747,7 +748,7 @@ it("preserve only reads Docker apart from its own tags, and prints no secrets or
 	const ok = t.preserve(t.snapshot().dir);
 	assert.equal(ok.status, 0, ok.stderr);
 	const verbs = new Set(t.calls().map((call) => call.args[0] === "compose" ? `compose ${call.args.at(-3)}` : call.args.slice(0, 2).join(" ")));
-	assert.deepEqual([...verbs].sort(), ["compose config", "container inspect", "image inspect", "image ls", "image tag", "ps --no-trunc"]);
+	assert.deepEqual([...verbs].sort(), ["compose config", "container inspect", "image inspect", "image ls", "image tag", "info --format", "ps --no-trunc"]);
 	const failing = setup();
 	failing.writePlan({ ...healthyPlan(failing.policy), compose: { status: 1, stdout: "SYNTHETIC_SECRET=do-not-print", stderr: "synthetic-docker-stderr" } });
 	const bad = failing.preserve(failing.snapshot().dir);
@@ -788,4 +789,118 @@ it("verify refuses a release whose directory has been loosened or whose volume m
 	meta.volumes.data = { name: restored.data, external: true };
 	fs.writeFileSync(metaFile, JSON.stringify(meta));
 	assert.match(t.run(["verify", release.release]).stderr, /^server-release: RELEASE_INVALID: /);
+});
+
+it("preserve and verify refuse a release directory inside or around the daemon's actual Docker root", () => {
+	const t = setup();
+	const release = preserved(t);
+	const before = t.tags();
+	for (const dockerRoot of [t.dir, t.releases, path.join(t.releases, "docker")]) {
+		t.writePlan({ ...healthyPlan(t.policy), info: { stdout: dockerRoot + "\n" } });
+		const preservedAgain = t.preserve(t.snapshot().dir);
+		assert.equal(preservedAgain.status, 1, dockerRoot);
+		assert.match(preservedAgain.stderr, /^server-release: RELEASE_ROOT_INVALID: /, dockerRoot);
+		const verified = t.run(["verify", release.release]);
+		assert.equal(verified.status, 1, dockerRoot);
+		assert.match(verified.stderr, /^server-release: RELEASE_ROOT_INVALID: /, dockerRoot);
+		assert.equal(verified.stdout, "");
+	}
+	// The same check through a symlink to the release directory's parent.
+	const link = path.join(t.dir, "docker-link");
+	fs.symlinkSync(t.dir, link);
+	t.writePlan({ ...healthyPlan(t.policy), info: { stdout: link + "\n" } });
+	assert.match(t.preserve(t.snapshot().dir).stderr, /^server-release: RELEASE_ROOT_INVALID: /);
+	assert.match(t.run(["verify", release.release]).stderr, /^server-release: RELEASE_ROOT_INVALID: /);
+	assert.deepEqual(t.tags(), before);
+	assert.deepEqual(fs.readdirSync(t.releases), [path.basename(release.release)]);
+});
+
+for (const [label, answer] of [
+	["docker info fails", { status: 1, stdout: "/srv/docker-root\n", stderr: "synthetic-info-detail" }],
+	["docker info prints nothing", { stdout: "" }],
+	["docker info prints a relative root", { stdout: "docker-root\n" }],
+	["docker info prints more than one line", { stdout: "/srv/docker-root\n/other\n" }],
+	["docker info prints an unnormalized root", { stdout: "/srv/../srv/docker-root\n" }],
+] as const) {
+	it(`preserve and verify fail closed when ${label}`, () => {
+		const t = setup();
+		const release = preserved(t);
+		t.writePlan({ ...healthyPlan(t.policy), info: answer });
+		for (const result of [t.preserve(t.snapshot().dir), t.run(["verify", release.release])]) {
+			assert.equal(result.status, 1);
+			assert.match(result.stderr, /^server-release: DOCKER_FAILED: /);
+			assert.ok(!result.stderr.includes("synthetic-info-detail"));
+			assert.equal(result.stdout, "");
+		}
+		assert.equal(Object.keys(t.tags()).length, 3);
+		assert.deepEqual(fs.readdirSync(t.releases), [path.basename(release.release)]);
+	});
+}
+
+// Test-only preload for the CLI process: once a release has been renamed into
+// LH_TEST_FAIL_ROOT, opening that directory (to sync it) fails as a disk would.
+const failRootSync = path.join(root, "fail-root-sync.mjs");
+fs.writeFileSync(failRootSync, `
+import fs from "node:fs";
+const target = process.env.LH_TEST_FAIL_ROOT;
+const open = fs.promises.open;
+fs.promises.open = async function (file, flags, ...rest) {
+	if (file === target && flags === "r" && fs.readdirSync(target).some((name) => name.startsWith("release-"))) {
+		throw Object.assign(new Error("synthetic EIO"), { code: "EIO" });
+	}
+	return open.call(this, file, flags, ...rest);
+};
+// With LH_TEST_FAIL_WITHDRAW, moving a published release-* directory away fails too.
+// The first rename, from .partial-*, still works.
+const rename = fs.promises.rename;
+fs.promises.rename = async function (from, to) {
+	if (process.env.LH_TEST_FAIL_WITHDRAW && String(from).split("/").at(-1).startsWith("release-")) {
+		throw Object.assign(new Error("synthetic EIO"), { code: "EIO" });
+	}
+	return rename.call(this, from, to);
+};
+`);
+const syncFails = (t: ReturnType<typeof setup>) => ({ env: { NODE_OPTIONS: `--import ${failRootSync}`, LH_TEST_FAIL_ROOT: t.releases } });
+
+it("preserve withdraws a release it already renamed into place when syncing the directory fails, then removes its tags", () => {
+	const t = setup();
+	fs.writeFileSync(t.planFile + ".state", JSON.stringify({ tags: { "learnharness:server": ids.app } }));
+	const result = t.preserve(t.snapshot().dir, [], syncFails(t));
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /^server-release: INTERNAL: /);
+	assert.equal(result.stdout, "");
+	assert.deepEqual(fs.readdirSync(t.releases), []);
+	assert.deepEqual(t.tags(), { "learnharness:server": ids.app });
+	assert.equal(tagCalls(t, "rm").length, 3);
+});
+
+it("preserve reports a cleanup failure when withdrawing a renamed release cannot remove its tags", () => {
+	const t = setup();
+	t.writePlan({ ...healthyPlan(t.policy), "image rm": { status: 1 } });
+	const result = t.preserve(t.snapshot().dir, [], syncFails(t));
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /^server-release: RELEASE_CLEANUP_FAILED: /);
+	assert.deepEqual(fs.readdirSync(t.releases).filter((name) => name.startsWith("release-")), []);
+});
+
+it("preserve keeps every new tag when it cannot withdraw a release it already published", () => {
+	const t = setup();
+	fs.writeFileSync(t.planFile + ".state", JSON.stringify({ tags: { "learnharness:server": ids.app } }));
+	const failing = syncFails(t);
+	const result = t.preserve(t.snapshot().dir, [], { env: { ...failing.env, LH_TEST_FAIL_WITHDRAW: "1" } });
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /^server-release: RELEASE_CLEANUP_FAILED: /);
+	assert.equal(result.stdout, "");
+	const left = fs.readdirSync(t.releases);
+	assert.equal(left.length, 1);
+	assert.match(left[0]!, /^release-/);
+	assert.deepEqual(tagCalls(t, "rm"), []);
+	const tags = t.tags();
+	assert.equal(tags["learnharness:server"], ids.app);
+	assert.equal(Object.keys(tags).length, 4);
+	// The owner reviews it; the retained material itself is intact.
+	const verified = t.run(["verify", path.join(t.releases, left[0]!)]);
+	assert.equal(verified.status, 0, verified.stderr);
+	const release = JSON.parse(verified.stdout) as Release;
+	for (const service of ["app", "egress", "demo"] as const) assert.equal(tags[release.images[service].tag], ids[service]);
 });
