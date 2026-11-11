@@ -1,0 +1,6 @@
+# Worker-only context (BuildKit reads this file instead of the root
+# .dockerignore for scripts/demo/Dockerfile). The worker needs its own
+# controller and the shared offline document policy, nothing else.
+**
+!scripts/demo/*.mjs
+!src/core/demo-document-policy.ts

@@ -6,7 +6,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute } from "../tool-execute.ts";
 import { isServerMode } from "../../core/server-capabilities.ts";
 import { publicFetch } from "../public-fetch.ts";
-import { resolveSourcePath } from "./fs-shared.ts";
+import { resolveIssuedDownload } from "./fs-shared.ts";
 import { PdfPageLimitError, pdfExtract, pdfInfo, pdfProbe, pdfSearch } from "../subagents/pdf-ops.ts";
 
 /**
@@ -120,10 +120,7 @@ export function createPdfReadTools(dir: string): Record<string, AgentTool<any>> 
 			if (!scoped) return null;
 			const issued = downloads.get(scoped);
 			if (!issued) return null;
-			const checked = resolveSourcePath(scoped, { restricted: true, folders: [root], unavailable: [] });
-			const stat = await fs.lstat(scoped);
-			if (checked !== scoped || !stat.isFile() || stat.dev !== issued.dev || stat.ino !== issued.ino) return null;
-			return checked;
+			return resolveIssuedDownload(scoped, root, issued);
 		} catch { return null; }
 	}
 	function pathError(tool: string): string {

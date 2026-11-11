@@ -26,6 +26,32 @@ services:
       - egress-state:/run/lh-egress
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+  # Generated JavaScript runs here, never in the app's privileged namespace.
+  # Only a private Unix control socket is shared. No app data or auth mounts.
+  demo:
+    image: learnharness:demo
+    build:
+      context: .
+      dockerfile: scripts/demo/Dockerfile
+    network_mode: none
+    user: "1000:1000"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./scripts/demo/seccomp.json
+    restart: unless-stopped
+    stop_grace_period: 10s
+    cpus: 1
+    mem_limit: 1g
+    memswap_limit: 1g
+    pids_limit: 256
+    volumes:
+      - demo-socket:/run/learnharness-demo
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777
+      - /dev/shm:rw,noexec,nosuid,nodev,size=128m,mode=1777
   app:
     image: learnharness:server
     network_mode: service:egress
@@ -33,6 +59,9 @@ services:
     ports: !reset []
     depends_on:
       egress:
+        condition: service_healthy
+        restart: true
+      demo:
         condition: service_healthy
         restart: true
     environment:
@@ -46,6 +75,14 @@ services:
         bind:
           create_host_path: false
       - egress-state:/run/lh-egress:ro
+      - type: bind
+        source: /var/lib/learnharness-materials
+        target: /materials
+        read_only: true
+        bind:
+          create_host_path: false
+      - demo-socket:/run/learnharness-demo:ro
 
 volumes:
   egress-state:
+  demo-socket:

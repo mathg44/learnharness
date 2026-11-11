@@ -11,7 +11,8 @@ import type { LearnerImage } from "../tools/learner-image.ts";
 import { embedLearnerImage, LEARNER_IMAGE_HREF } from "../../core/learner-image-svg.ts";
 import { annotationPlacementProblem } from "./annotation-svg.ts";
 import { getHeadless, type HeadlessApi } from "./headless.ts";
-import { serverJobBlockReason } from "../../core/server-capabilities.ts";
+import { isServerMode, serverJobBlockReason } from "../../core/server-capabilities.ts";
+import { staticSvgProblem } from "./static-svg.ts";
 
 /**
  * The visual-maker sub-agent (vision §2.5): authors ONE precise SVG from a
@@ -175,7 +176,10 @@ export async function runVisualMaker(input: VisualMakerInput, opts: VisualMakerO
 		return { svg: "", notes: `FAILED: ${serverBlock}` };
 	}
 
-	const reason = headless.unavailableReason();
+	// Server visuals render natively only (headless.renderSvg refuses the
+	// browser there), so browser availability does not apply.
+	const server = isServerMode();
+	const reason = server ? null : headless.unavailableReason();
 	if (reason) {
 		return { svg: "", notes: `FAILED: ${reason}` };
 	}
@@ -225,11 +229,14 @@ export async function runVisualMaker(input: VisualMakerInput, opts: VisualMakerO
 	/** Render-only embedding; persisted SVGs keep the small placeholder. */
 	const embed = (svg: string): string => learnerImage ? embedLearnerImage(svg, learnerImage) : svg;
 	const render = (svg: string) => headless.renderSvg(embed(svg), learnerImage ? { nativeOnly: true } : undefined);
-	/** Image mode: the problem with an SVG that doesn't place the picture
-	 *  exactly once (null = fine, and always fine without an image). */
+	/** Why write/edit must refuse this SVG (null = fine): image mode needs the
+	 *  picture placed exactly once; server mode needs the static policy. */
 	const placementProblem = (svg: string): string | null => {
-		if (!learnerImage) return null;
-		return annotationPlacementProblem(svg, learnerImage.width, learnerImage.height);
+		const placement = learnerImage ? annotationPlacementProblem(svg, learnerImage.width, learnerImage.height) : null;
+		if (placement || !server) return placement;
+		// Server: authored SVGs stay static and self-contained. The model may
+		// name only the placeholder; the app alone embeds snapshot bytes.
+		return staticSvgProblem(svg, { learnerPlaceholder: learnerImage !== undefined });
 	};
 	let currentSvg: string | null = null;
 	/** The svg shown in the most recent render (null = never rendered). */

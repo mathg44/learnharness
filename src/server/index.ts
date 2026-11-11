@@ -7,6 +7,16 @@
 // Bootstrap process-wide protections before exported services can recover work.
 // Storage adapters remain independent of network-readiness installation.
 import "./egress.ts";
+import "./materials.ts";
+import "./visuals.ts";
+import "./demo.ts";
+import { isServerMode, SERVER_CAPABILITIES } from "../core/server-capabilities.ts";
+
+if (isServerMode()) {
+	console.info("Server capability readiness:", JSON.stringify(Object.fromEntries(
+		Object.entries(SERVER_CAPABILITIES).map(([name, capability]) => [name, capability.ready()]),
+	)));
+}
 
 export * from "./chat-handler.ts";
 export * from "./events-stream.ts";

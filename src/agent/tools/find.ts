@@ -4,7 +4,8 @@ import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute } from "../tool-execute.ts";
 import { capOutput, formatSize, MAX_OUTPUT_BYTES, matchGlob, sourceSearchRoots, walkFiles, WALK_TIMEOUT_MS } from "./fs-shared.ts";
-import { resolvePolicy } from "./file-access.ts";
+import { resolvePolicy, SERVER_FILE_TOOLS_HELP } from "./file-access.ts";
+import { isServerMode } from "../../core/server-capabilities.ts";
 
 /** Pure-Node pi/fd-style search: no shell, no symlink following, mandatory
  * source denials. Restricted default searches share ONE budget/limit across
@@ -19,7 +20,9 @@ const findInput = Type.Object({
 export const findTool: AgentTool<typeof findInput> = {
 	name: "find",
 	label: "find",
-	description: `Search for files by glob pattern. Returns paths relative to an explicit search directory, or absolute paths when searching the allowed folders by default. Use ls without a path to discover allowed roots. Ignores node_modules, .git, and Library directories, and skips known sensitive locations (including agent transcripts, credential stores and browser profiles), plus .env/.env.* files. Output is truncated to ${DEFAULT_LIMIT} total results or ${formatSize(MAX_OUTPUT_BYTES)} (whichever is hit first).`,
+	get description() {
+		return `Search for files by glob pattern. Returns paths relative to an explicit search directory, or absolute paths when searching the allowed folders by default. ${isServerMode() ? SERVER_FILE_TOOLS_HELP : "Use ls without a path to discover allowed roots."} Ignores node_modules, .git, and Library directories, and skips known sensitive locations (including agent transcripts, credential stores and browser profiles), plus .env/.env.* files. Output is truncated to ${DEFAULT_LIMIT} total results or ${formatSize(MAX_OUTPUT_BYTES)} (whichever is hit first).`;
+	},
 	parameters: findInput,
 	execute: serverExecute("find", findInput, async (input, ctx) => {
 		if (ctx?.signal?.aborted) return "Operation aborted";

@@ -1,0 +1,10 @@
+<!doctype html><html><body><script>
+// Known residual: CSP does not govern WebRTC ICE. Kept as a probe so a
+// Chromium change in either direction shows up in the report.
+function report(n, o) { try { parent.postMessage({ type: "probe", name: n, outcome: String(o) }, "*"); } catch (e) {} }
+try {
+	var pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:__STUN_HOST__:3478" }, { urls: "turn:__STUN_HOST__:3479", username: "u", credential: "c" }] });
+	pc.createDataChannel("x");
+	pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).then(function () { report("webrtc", "offer set"); }, function (e) { report("webrtc", "rejected " + e); });
+} catch (e) { report("webrtc", "threw " + e.name); }
+</script></body></html>

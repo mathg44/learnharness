@@ -5,9 +5,15 @@ import { serverExecute } from "../tool-execute.ts";
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
 import type { DemoResult } from "../../core/contracts.ts";
-import { getHeadless, type DemoRunResult, type HeadlessApi } from "./headless.ts";
+import { getHeadless, type DemoRunResult, type HeadlessApi, type RunDemoOptions } from "./headless.ts";
 import { healToolRecord } from "../tools/heal.ts";
-import { serverJobBlockReason } from "../../core/server-capabilities.ts";
+import { isServerMode, serverJobBlockReason } from "../../core/server-capabilities.ts";
+import {
+	demoHtmlProblem,
+	describeDemoHtmlProblem,
+	findExternalReferences,
+	MAX_DEMO_HTML_BYTES,
+} from "../../core/demo-document-policy.ts";
 
 /**
  * The demo-builder sub-agent (vision §2 interactive demos + §2.5 "sub-agents
@@ -47,13 +53,26 @@ export interface DemoBuilderOptions {
 	chatId?: string;
 }
 
+const DESKTOP_RUNTIME = `- Single file. Vanilla JS + Canvas 2D or SVG. CDN imports (e.g. a plotting or math library) are allowed
+  when they genuinely help — but prefer dependency-free; you own the failure if a CDN import fails.`;
+
+const OFFLINE_RUNTIME = `- Single file, fully OFFLINE. Vanilla JS + Canvas 2D or SVG, everything inline. There is no network:
+  no CDN, no external scripts, styles, fonts, images or links, no fetch. Do not write any http(s)://
+  address at all (SVG/XHTML namespace URIs are fine); run_demo fails a document that names one.
+  Images must be inline SVG or data: URLs. Keep the document under ${MAX_DEMO_HTML_BYTES / 1024} KB.`;
+
+function instructions(offline: boolean): string {
+	return INSTRUCTIONS.replace(RUNTIME_SLOT, offline ? OFFLINE_RUNTIME : DESKTOP_RUNTIME);
+}
+
+const RUNTIME_SLOT = "{{runtime}}";
+
 const INSTRUCTIONS = `You are a demo builder — a specialist sub-agent inside a learning application. You
 receive a brief for ONE interactive teaching instrument and deliver a single self-contained HTML document
 that runs it. You never see the lesson; the brief is everything you know.
 
 Runtime contract (the document runs in a sandboxed iframe, sandbox="allow-scripts", opaque origin):
-- Single file. Vanilla JS + Canvas 2D or SVG. CDN imports (e.g. a plotting or math library) are allowed
-  when they genuinely help — but prefer dependency-free; you own the failure if a CDN import fails.
+{{runtime}}
 - NO localStorage, sessionStorage, or document.cookie — the sandbox makes them throw.
 - The parent sizes the iframe to the document height automatically; just build normal flowing layout.
   Make the demo fill the width and size its own height sensibly.
@@ -81,6 +100,19 @@ interface BuilderState {
 	/** The html that the last run_demo tested (null = never tested). */
 	testedHtml: string | null;
 	lastResult: DemoRunResult | null;
+	/** Server mode: offline document policy (no network references). */
+	offline: boolean;
+	abortSignal?: AbortSignal;
+}
+
+/** Offline problems the browser run cannot be trusted to surface (a
+ *  reference the page never loads is still a dead link). */
+function offlineProblem(html: string): string | null {
+	const problem = demoHtmlProblem(html);
+	if (problem) return describeDemoHtmlProblem(problem);
+	const references = findExternalReferences(html, 5);
+	if (references.length > 0) return `network addresses are not allowed offline: ${references.join(", ")}`;
+	return null;
 }
 
 const writeDemoInput = Type.Object({
@@ -112,6 +144,10 @@ export function createDemoBuilderTools(
 			parameters: writeDemoInput,
 			execute: serverExecute("write_demo", writeDemoInput, async ({ html }) => {
 				if (!html || html.trim().length === 0) return "ERROR: empty document — write the full HTML.";
+				if (state.offline) {
+					const structural = demoHtmlProblem(html);
+					if (structural) return `ERROR: ${describeDemoHtmlProblem(structural)}. Not saved; fix and write again.`;
+				}
 				state.html = html;
 				onActivity?.(`write_demo: ${(html.length / 1024).toFixed(1)} KB`);
 				return `Saved (${html.length} bytes). Now call run_demo to test it — never deliver untested.`;
@@ -130,8 +166,10 @@ export function createDemoBuilderTools(
 				if (reason) return `HEADLESS UNAVAILABLE: ${reason}`;
 				let result: DemoRunResult;
 				try {
-					result = await headless.runDemo(state.html, probe ? { probe } : undefined);
+					result = await headless.runDemo(state.html, runOptions(state, probe));
+					if (state.offline) result = withOfflineFindings(result, state.html);
 				} catch (err) {
+					if (state.abortSignal?.aborted) throw err;
 					const msg = err instanceof Error ? err.message : String(err);
 					onActivity?.("run_demo: browser error");
 					return `HEADLESS ERROR (retrying may help): ${msg}`;
@@ -145,6 +183,21 @@ export function createDemoBuilderTools(
 			}),
 		},
 	});
+}
+
+function runOptions(state: BuilderState, probe?: string): RunDemoOptions | undefined {
+	const options: RunDemoOptions = {
+		...(probe ? { probe } : {}),
+		...(state.abortSignal ? { signal: state.abortSignal } : {}),
+	};
+	return Object.keys(options).length > 0 ? options : undefined;
+}
+
+/** Fold the static offline check into a run result, as a failed request. */
+function withOfflineFindings(result: DemoRunResult, html: string): DemoRunResult {
+	const problem = offlineProblem(html);
+	if (!problem) return result;
+	return { ...result, failedRequests: [...result.failedRequests, problem], ok: false };
 }
 
 function summarizeCounts(result: DemoRunResult): string {
@@ -202,7 +255,14 @@ export async function runDemoBuilder(input: DemoBuilderInput, opts: DemoBuilderO
 		return { title, html: "", tested: true, notes: `FAILED: ${reason}` };
 	}
 
-	const state: BuilderState = { html: null, testedHtml: null, lastResult: null };
+	const offline = isServerMode();
+	const state: BuilderState = {
+		html: null,
+		testedHtml: null,
+		lastResult: null,
+		offline,
+		...(opts.abortSignal ? { abortSignal: opts.abortSignal } : {}),
+	};
 
 	const prompt = [
 		`Demo title: ${title}`,
@@ -217,7 +277,7 @@ export async function runDemoBuilder(input: DemoBuilderInput, opts: DemoBuilderO
 		const result = await runSubagent(Object.values(createDemoBuilderTools(state, headless, opts.onActivity)), {
 			role: "demoBuilder",
 			engine: opts.engine,
-			systemPrompt: INSTRUCTIONS,
+			systemPrompt: instructions(offline),
 			prompt,
 			maxTurns: opts.maxSteps ?? 24,
 			abortSignal: opts.abortSignal,
@@ -241,14 +301,19 @@ export async function runDemoBuilder(input: DemoBuilderInput, opts: DemoBuilderO
 		};
 	}
 
+	// A cancelled job delivers nothing, not even a failure note.
+	if (opts.abortSignal?.aborted) throw opts.abortSignal.reason ?? new Error("demo build cancelled");
+
 	// The verify gate: the delivered html must have a clean headless run —
 	// even when the model claims success or forgets the final run_demo.
 	if (state.testedHtml !== state.html || !state.lastResult?.ok) {
 		opts.onActivity?.("final verification");
 		let verify: DemoRunResult;
 		try {
-			verify = await headless.runDemo(state.html);
+			verify = await headless.runDemo(state.html, runOptions(state));
+			if (offline) verify = withOfflineFindings(verify, state.html);
 		} catch (err) {
+			if (opts.abortSignal?.aborted) throw err;
 			const msg = err instanceof Error ? err.message : String(err);
 			return { title, html: "", tested: true, notes: `FAILED: final verification crashed — ${msg}` };
 		}

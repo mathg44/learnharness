@@ -6,12 +6,22 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { PDFPageProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { pdfCheckpoint } from "./pdf-markdown.ts";
 import { type PdfOperationOptions, withPdfDocument } from "./pdf-ops.ts";
+import { isServerMode as isServerDeployment } from "../../core/server-capabilities.ts";
+import { createServerHeadless, runServerDemo } from "../server-demo.ts";
 
 /**
- * Verification engines for sub-agents: demos use the app's own Electron
- * browser-service via puppeteer-core, with system Chrome as fallback.
- * SVGs use resvg (browser fallback); PDFs use pdfjs + Skia (no browser).
- * No extra Chromium is shipped or downloaded.
+ * Verification engines for sub-agents.
+ *
+ * DESKTOP: demos use the app's own Electron browser-service via
+ * puppeteer-core, with system Chrome as fallback. SVGs use resvg (browser
+ * fallback); PDFs use pdfjs + Skia (no browser). The desktop app ships and
+ * downloads no extra Chromium.
+ *
+ * SERVER (LH_SERVER_MODE set): no in-process or local browser at all.
+ * Demos run in the separate offline worker container (scripts/demo), which
+ * ships Debian's Chromium, reached through ../server-demo.ts; SVGs and PDFs
+ * stay native. getHeadless() returns that adapter, and runDemo and
+ * withBrowserPage below refuse the local path even when called directly.
  *
  * Chrome fallback resolution: CHROME_PATH first, then common macOS,
  * Windows and Linux install paths. `available()` is a cheap executable
@@ -40,6 +50,8 @@ export interface RunDemoOptions {
 	/** Optional JS expression evaluated in the page after settling; its value
 	 * is returned to the builder so it can assert on internal state. */
 	probe?: string;
+	/** Cancels the run; the server worker kills its browser. */
+	signal?: AbortSignal;
 }
 
 export interface RenderSvgOptions {
@@ -76,8 +88,14 @@ export interface HeadlessApi {
 /** Test seam — undefined in production. */
 export const headlessOverride: { current?: HeadlessApi } = {};
 
+let serverHeadless: HeadlessApi | null = null;
+
+/** Server mode never touches a local browser: demos run in the isolated
+ *  offline worker (../server-demo.ts), everything else stays native. */
 export function getHeadless(): HeadlessApi {
-	return headlessOverride.current ?? realHeadless;
+	if (headlessOverride.current) return headlessOverride.current;
+	if (isServerDeployment()) return (serverHeadless ??= createServerHeadless(realHeadless));
+	return realHeadless;
 }
 
 // ─── Chrome resolution ───────────────────────────────────────────────────────
@@ -239,6 +257,9 @@ async function connectBrowserService(): Promise<import("puppeteer-core").Browser
 let helperPageChain: Promise<unknown> = Promise.resolve();
 
 async function withBrowserPage<T>(fn: (page: import("puppeteer-core").Page) => Promise<T>): Promise<T> {
+	// Every in-process browser path ends here. On a server, generated code
+	// only ever runs in the offline worker container.
+	if (isServerDeployment()) throw new Error("The local browser is not available on this server.");
 	// Helper first (owner ruling 2026-10-10: the app's own Chromium primary,
 	// system Chrome fallback) — deterministic across users, zero install.
 	const helper = await connectBrowserService();
@@ -285,6 +306,9 @@ function tempDir(prefix: string): string {
 // ─── Demo execution ──────────────────────────────────────────────────────────
 
 async function runDemo(html: string, opts: RunDemoOptions = {}): Promise<DemoRunResult> {
+	// Direct callers of realHeadless on a server still reach only the worker:
+	// nothing below (temp file, local browser) runs there.
+	if (isServerDeployment()) return runServerDemo(html, opts);
 	const settleMs = opts.settleMs ?? 2000;
 	const dir = tempDir("lh-demo-");
 	const file = path.join(dir, "demo.html");
@@ -425,6 +449,17 @@ async function renderSvg(svg: string, opts: RenderSvgOptions = {}): Promise<Buff
 	// opts override). The browser path below stays as the fallback for
 	// exotic-SVG features resvg cannot parse — failures there used to be
 	// the ONLY path, so nothing regresses.
+	// SERVER MODE (#26): native only, never the browser. resvg reads file
+	// paths named by <image href> while it parses, so the static policy runs
+	// first; nativeOnly (the annotation render) also admits the one bounded
+	// raster the app embedded from the session snapshot.
+	const { isServerMode } = await import("../../core/server-capabilities.ts");
+	const server = isServerMode();
+	if (server) {
+		const { staticSvgProblem } = await import("./static-svg.ts");
+		const problem = staticSvgProblem(svg, { embeddedRaster: opts.nativeOnly === true });
+		if (problem) throw new Error(`SVG refused: ${problem}`);
+	}
 	const { width } = svgViewport(svg, opts);
 	try {
 		const { Resvg } = await import("@resvg/resvg-js");
@@ -433,9 +468,17 @@ async function renderSvg(svg: string, opts: RenderSvgOptions = {}): Promise<Buff
 			font: { loadSystemFonts: true },
 			background: "#ffffff",
 		});
+		if (server) {
+			// Plan the canvas before allocating it: the PDF page bounds apply.
+			if (resvg.imagesToResolve().length > 0) throw new Error("SVG refused: external images are not loaded");
+			const height = Math.ceil((resvg.height * width) / resvg.width);
+			if (!(width > 0 && height > 0) || width > MAX_PDF_CANVAS_SIDE || height > MAX_PDF_CANVAS_SIDE || width * height > MAX_PDF_CANVAS_PIXELS) {
+				throw new Error(`SVG refused: a ${width}×${height} render exceeds ${MAX_PDF_CANVAS_SIDE}px per side or 16 megapixels`);
+			}
+		}
 		return providerSafePng(resvg.render().asPng());
 	} catch (error) {
-		if (opts.nativeOnly) throw error;
+		if (opts.nativeOnly || server) throw error;
 		/* fall through to the browser path */
 	}
 	const dir = tempDir("lh-visual-");
