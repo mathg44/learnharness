@@ -135,6 +135,8 @@ Do this immediately before the proposed replacement, after preventing new learne
 
 The source revision is an operator declaration. Matching recipes, seccomp and Compose hashes do not prove that every image byte was built from that commit. The operator must retain trustworthy build/source evidence.
 
+The private release bundle is never build input. Its saved recipes retain their original build entries for comparison, but recovery always uses `--no-build`. Never run `docker compose build` in that bundle or pass it to `docker build`. To rebuild source, extract `source.tar` into a separate clean directory with no private configuration or snapshots, then repeat the reviewed candidate-build procedure.
+
 The helper never replaces a service, pulls images or deletes old releases. A failed preservation must not publish a usable-looking partial release. Resolve its fixed error code before proceeding.
 
 ## Replace only with approval
@@ -276,7 +278,7 @@ Common refusal codes:
 | `SOURCE_MISMATCH`, `CONFIG_MISMATCH`, `SECCOMP_MISMATCH` | Reconcile the actual installed source/configuration. Do not disable comparisons or substitute the candidate's recipes. |
 | `SNAPSHOT_MISMATCH`, `SERVICE_NOT_RUNNING` | Confirm project identity and settled service state, then take a new verified pre-update snapshot if the app was recreated. |
 | `TAG_EXISTS` | Choose a new preservation time. Never overwrite the existing retention tag. |
-| `TAG_FAILED`, `RELEASE_CLEANUP_FAILED` | Stop and inspect only the failed run's newly created retention tags. If ownership is uncertain, obtain an operator decision instead of deleting tags. |
+| `TAG_FAILED`, `RELEASE_CLEANUP_FAILED` | Stop and inspect this run's failed release directory, any quarantined copy and its new retention tags. Failed withdrawal keeps the tags so remaining recovery material stays complete, but the failed release requires owner review before use. If ownership is uncertain, obtain an operator decision instead of deleting anything. |
 | `RELEASE_INVALID`, `IMAGE_MISSING`, `TAG_MISMATCH` | Recovery material is incomplete or changed. Do not begin replacement or assume a tag with the same name is equivalent. |
 | `SNAPSHOT_EXPIRED`, `RELEASE_EXPIRED` | The supported rollback deadline has passed. Obtain a new recovery plan; do not edit timestamps to extend it. |
 

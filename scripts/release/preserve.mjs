@@ -3,7 +3,8 @@
  * verified pre-update snapshot, the exact app, egress and demo images under
  * new retention tags, the recipes and private config they ran with, and a Git
  * archive of the declared source revision. Docker is only read, apart from
- * adding (and on failure removing) those tags.
+ * adding retention tags and cleaning up failed attempts. If withdrawing a
+ * failed publication cannot complete, its tags stay for owner review.
  */
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
