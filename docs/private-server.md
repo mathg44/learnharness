@@ -38,13 +38,13 @@ Some tools can reach host files, the LAN or other services, so on a server they 
 
 | Capability | Tools and jobs | Restored by |
 | --- | --- | --- |
-| `files` | `read`, `ls`, `find`, `grep`, `show_image` | #22 |
+| `files` | `read`, `ls`, `find`, `grep`, `show_image` | #22 read-only `/materials` mount, checked fresh |
 | `research` | `research` job, `web_search`, `web_fetch` | #23 public transport plus fresh #27 container enforcement |
 | `pdf` | `pdf` job, `web_fetch_pdf`, `pdf_info`, `pdf_extract`, `pdf_search`, `pdf_render` | #24 downloads plus fresh #27 enforcement; local-path jobs also require file access |
-| `demo` | `demo` job | #25 |
-| `visual` | `visual` job | #26 |
+| `demo` | `demo` job | #25 isolated offline worker with a verified Chromium sandbox |
+| `visual` | `visual` job | #26 successful native rendering probe and static SVG policy |
 
-Research and downloaded PDFs require a fresh, namespace-bound check from the [container firewall guard](container-egress.md). Without verified enforcement they stay unavailable. Files, demo and visual checks still return false. There is no environment switch that marks enforcement ready.
+Research and downloaded PDFs require a fresh, namespace-bound check from the [container firewall guard](container-egress.md). Without verified enforcement they stay unavailable. Files require a fresh check of the [materials mount](#learner-files-22). Demos require a healthy sandboxed worker; visuals require a successful native-render probe. Missing or failed checks deny access. Browser Settings cannot mark a protection ready.
 
 While a capability is unavailable, the tool registries leave its tools out of what the model sees. Tool execution, job dispatch, the job runner (including jobs recovered after a restart) and the worker entrypoints each refuse it as well. The model gets `The "research" tool is not available on this server.` and jobs fail with a matching message. These checks apply whenever `LH_SERVER_MODE` is set at all.
 
@@ -85,7 +85,7 @@ The transport enforces each endpoint's listed method. POST endpoints accept no q
 
 Server page-fetch output is capped at 40,000 characters for the complete result, including the title, source metadata, errors and truncation marker. The Jina Reader fallback for JavaScript-rendered pages is off in server mode, since that service fetches the target itself and the local checks can't constrain it. Such pages fail with an honest extraction error. Desktop and local development keep plain `fetch` and the Jina fallback.
 
-These rules apply inside the app, independently of #27's container firewall. Research PDF downloads reuse `publicFetch` under the rules below. Research and downloaded-PDF runtime readiness depends on the live guard. File tools remain disabled. Upload local material through the browser instead.
+These rules apply inside the app, independently of #27's container firewall. Research PDF downloads reuse `publicFetch` under the rules below. Research and downloaded-PDF runtime readiness depends on the live guard. Local files are limited to the [materials mount](#learner-files-22).
 
 ### Research PDFs (#24)
 
@@ -97,7 +97,7 @@ The researcher can download a PDF it finds online, inspect its page count, searc
 | Researcher's `web_fetch_pdf` | Uses `publicFetch`, with the same URL, DNS, connected-peer, redirect and header rules as page fetching. No private service or configured inference proxy is an exception. |
 | `pdf_info`, `pdf_extract`, `pdf_search` | Reopen only files downloaded by that research job. Canonical containment and the mandatory sensitive-path guard still apply. Pre-existing files, symlink escapes and paths from another job are refused. |
 | Native inspection, text extraction, search and page rendering | Use pdfjs and Skia, not Chrome or a remote reader. No embedded PDF link is fetched. Open documents and pages are released on success, failure and cancellation. |
-| Teacher's local-path `pdf` job | Remains unavailable without file capability readiness, even if research PDF readiness is restored. Direct worker invocation and recovered jobs obey the same check. No learner filesystem roots are added here. |
+| Teacher's local-path `pdf` job | Needs both file and research PDF readiness. Paths must resolve inside `/materials`, as for the other [file tools](#learner-files-22). Direct worker invocation and recovered jobs obey the same check. |
 | Browser session uploads and graph PDF imports | Separate uploaded-byte transcription flows. Their models, role selection, usage accounting and stored transcriptions are unchanged. |
 
 Server research PDF limits are fixed by the app, not model-selected arguments:
@@ -116,9 +116,44 @@ Cancellation reaches requests, file writes and PDF operations. PDF parsing and r
 
 See the [verification checklist](verification/24-research-pdfs.md).
 
+### Learner files (#22)
+
+On the server, `read`, `ls`, `find`, `grep`, `show_image` and the teacher's local-path `pdf` job see one folder: `/materials`. The host directory `/var/lib/learnharness-materials` is bind-mounted there read-only. Settings → Agent → Tools → File access has no effect on the server; its folders and toggle can neither widen nor replace this root. Relative and `~` paths still resolve against the container's home, so they are refused. `ls` without a path lists `/materials`.
+
+[materials.ts](../src/server/materials.ts) checks the mount on every admission and before every file read. Any failure keeps the tools out of the model's view and makes direct calls refuse. The check passes only when all of these hold:
+
+- `/materials` is a real directory, not a symlink, readable by the app.
+- `/proc/self/mountinfo` lists it as its own mount, and the topmost mount there has the `ro` option.
+- That mount's source inside its filesystem is exactly `/var/lib/learnharness-materials`. Any other read-only mount at `/materials` is refused. The path is fixed in code, with no environment or Settings override.
+- A write-access probe fails with `EROFS`, so the kernel enforces read-only.
+- Nothing else is mounted below it.
+- It does not contain, and is not inside, the data directory, the credential directory, the backup staging directory or home. That holds both for container paths and for the host subtree behind each bind mount on the same filesystem. A protected path that does not exist yet is resolved through its nearest existing parent, so a symlink cannot hide an overlap. Any other resolution error fails the check.
+
+Inside the root, the existing guards still apply. On a server every path check uses this policy, even when code passes its own. Research PDF downloads are reopened by a separate check limited to files that job wrote. Symlinks resolve before the containment check, so a link pointing out of `/materials` is refused. Dotenv files are refused even inside it. A missing or broken mount means no file access, never a fallback to home or to Settings. The check runs only in server mode; desktop and local development never read `/proc`.
+
 Still available on the server: teaching, probing, practice, mathematics, the knowledge graph, uploaded-note imports (including page-by-page PDF transcription with the PDF-reader model), and browser session attachments. Session attachments are explicit uploads and do not enable file tools. See [session attachments](getting-started.md#attach-material-to-a-session).
 
+### Native visuals (#26)
+
+Server visuals use resvg only. A native failure returns an error, never generated HTML or an unrestricted browser fallback. Before parsing, SVGs are checked for external references, scripts, event handlers, active elements, duplicate IDs and excessive reference expansion. Documents are limited to 1 MiB and 50,000 expanded elements; render canvases retain the 16-megapixel and 8192-pixel-side ceilings.
+
+Learner-image annotation reads only from `/materials`, under the same file policy. The model sees the normalized image and authors a placeholder; the app embeds the session-owned raster for native inspection. Saved results keep the snapshot reference, and downloads embed its bytes. Browser uploads remain separate and grant no server-path access. Rendering is in-process with cooperative cancellation, not a hard CPU sandbox.
+
+### Interactive demos (#25)
+
+Generated HTML and JavaScript run in a separate `demo` container with Chromium's own sandbox enabled. The worker has no network, provider credentials, app data or learner files. Its only shared mount is a private Unix control socket. The app cannot fall back to local Chrome or Electron on the server.
+
+Verification uses a fresh browser for each run, with one execution at a time, a 60-second deadline, one CPU and 1 GiB of memory. Failure, cancellation and worker restart reclaim the browser. Chromium sandbox verification must succeed before readiness opens. The worker-specific seccomp profile permits only the additional namespace operations needed by the sandbox; it does not change host security settings.
+
+Server demos must be self-contained. The displayed iframe keeps an opaque origin and cannot access app DOM, storage or cookies. Its document policy blocks HTTP resources, fetch and navigation, including CDN dependencies. The same restrictions apply to saved demos and the fixed outer wrapper used for downloads. Desktop keeps its existing demo behavior.
+
+The learner's browser is not fully offline. Real Chromium checks showed that WebRTC can still send STUN/TURN UDP traffic, and preconnect can still resolve DNS names. Those channels can send the demo's own contents outward, although they do not grant access to app records or credentials. The owner explicitly accepted these residual channels to enable interactive demos. The parent page sends `X-DNS-Prefetch-Control: off`, but the browser tests still observed explicit DNS hints. That header does not establish a DNS or WebRTC boundary. Do not describe the client policy as a network sandbox.
+
+See the [worker implementation and seccomp provenance](../scripts/demo/README.md) and [installation checks](verification/full-tools-installation.md).
+
 ## Start and stop
+
+Create `/var/lib/learnharness-materials` as a private directory owned by UID/GID 1000. Place only learner-approved material there. The app mounts it read-only; do not put credentials, backups or symlinks to unrelated files in it.
 
 Keep a private environment file **outside the checkout** containing only:
 
@@ -133,16 +168,16 @@ Prepare the private policy using the [container enforcement guide](container-egr
 export SERVER_ENV=/absolute/private/path/server.env
 
 docker compose --env-file "$SERVER_ENV" -p learnharness \
-  -f compose.yaml -f compose.server.yaml build egress app
+  -f compose.yaml -f compose.server.yaml build egress demo app
 docker compose --env-file "$SERVER_ENV" -p learnharness \
   -f compose.yaml -f compose.server.yaml up -d --no-build --wait
 
 # Stop only this app. The named volumes remain.
 docker compose --env-file "$SERVER_ENV" -p learnharness \
-  -f compose.yaml -f compose.server.yaml stop app egress
+  -f compose.yaml -f compose.server.yaml stop app demo egress
 ```
 
-For updates, stop and recreate both the app and its network guard together. Never recreate only the guard or fall back to the unrestricted base recipe. The [enforcement guide](container-egress.md#installation-and-replacement) covers pair recreation, inspection and removal.
+For updates, stop and recreate the app, demo worker and network guard together. Never recreate only the guard or fall back to the unrestricted base recipe. The [enforcement guide](container-egress.md#installation-and-replacement) covers pair recreation, inspection and removal.
 
 The project name `learnharness` fixes the volume names `learnharness_app-data` and `learnharness_app-auth`. Keep it stable and run one writer. Never use `down --volumes` on records you want to keep. The image is about 2.1 GB; check free disk space before building. Isolation settings (non-root, read-only root, dropped capabilities, tmpfs, loopback port) come from [compose.yaml](../compose.yaml) and are described in the [production container guide](production-container.md).
 

@@ -15,7 +15,8 @@ import {
 	walkFiles,
 	WALK_TIMEOUT_MS,
 } from "./fs-shared.ts";
-import { resolvePolicy } from "./file-access.ts";
+import { resolvePolicy, SERVER_FILE_TOOLS_HELP } from "./file-access.ts";
+import { isServerMode } from "../../core/server-capabilities.ts";
 
 /**
  * The grep tool — sources v1 (2026-09-19): pi's dist/core/tools/grep.js
@@ -50,7 +51,9 @@ const grepInput = Type.Object({
 export const grepTool: AgentTool<typeof grepInput> = {
 	name: "grep",
 	label: "grep",
-	description: `Search file contents for a pattern. Returns matching lines with file paths and line numbers; default searches of allowed folders use absolute paths. Use ls without a path to discover allowed roots. Ignores node_modules, .git, and Library directories, and skips known sensitive locations (e.g. ~/.ssh, ~/.aws, ~/.claude, browser profiles and LearnHarness credential stores), plus .env/.env.* files. Output is truncated to ${DEFAULT_LIMIT} matches or ${formatSize(MAX_OUTPUT_BYTES)} (whichever is hit first). Long lines are truncated to ${GREP_MAX_LINE_LENGTH} chars.`,
+	get description() {
+		return `Search file contents for a pattern. Returns matching lines with file paths and line numbers; default searches of allowed folders use absolute paths. ${isServerMode() ? SERVER_FILE_TOOLS_HELP : "Use ls without a path to discover allowed roots."} Ignores node_modules, .git, and Library directories, and skips known sensitive locations (e.g. ~/.ssh, ~/.aws, ~/.claude, browser profiles and LearnHarness credential stores), plus .env/.env.* files. Output is truncated to ${DEFAULT_LIMIT} matches or ${formatSize(MAX_OUTPUT_BYTES)} (whichever is hit first). Long lines are truncated to ${GREP_MAX_LINE_LENGTH} chars.`;
+	},
 	parameters: grepInput,
 	execute: serverExecute("grep", grepInput, async (input, ctx) => {
 		if (ctx?.signal?.aborted) return "Operation aborted";

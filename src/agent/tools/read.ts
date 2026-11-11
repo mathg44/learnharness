@@ -4,6 +4,8 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute, type ImageFileResult } from "../tool-execute.ts";
 import { resolveSourcePath } from "./fs-shared.ts";
+import { SERVER_FILE_TOOLS_HELP } from "./file-access.ts";
+import { isServerMode } from "../../core/server-capabilities.ts";
 import { detectSupportedImageMimeTypeFromFile, processImage } from "../image-processing/index.ts";
 
 /**
@@ -95,7 +97,12 @@ export function createReadTool(model?: ReadModel): AgentTool<typeof readInput> {
 	return {
 		name: "read",
 		label: "read",
-		description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50.0KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete. File access settings and protected-location denials apply; use ls without a path to discover allowed folders when restricted.`,
+		get description() {
+			const usage = "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50.0KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.";
+			return isServerMode()
+				? `${usage} ${SERVER_FILE_TOOLS_HELP} Protected-location denials still apply.`
+				: `${usage} File access settings and protected-location denials apply; use ls without a path to discover allowed folders when restricted.`;
+		},
 		parameters: readInput,
 		execute: serverExecute("read", readInput, async ({ path: rawPath, offset, limit }, { signal }): Promise<string | ImageFileResult> => {
 			const absolute = resolveSourcePath(rawPath);

@@ -16,7 +16,8 @@ This change is code and disposable-test work. Deployment, live provider calls, s
 | Browser dictation audio | The learner's laptop or phone connects directly to `wss://api.deepgram.com/v1/listen`. Server-container filtering does not govern that browser connection. |
 | DNS | Docker's embedded resolver, `127.0.0.11`, TCP/UDP 53 only, with host-inherited upstreams. A different nameserver fails readiness. Explicit container/daemon DNS overrides are unsupported; their sandbox-originated forwarding is blocked. |
 | Local app health | App profile only, `127.0.0.1:3000`. Replies to accepted incoming connections remain permitted. |
-| Isolated browser workers | Public TCP 80/443 and Docker DNS only. No inference exception, app-loopback exception, published CDP port, app storage or credentials. #27 tests this network policy; #25 still owns the production browser runtime and demo enablement. |
+| Browser network-test fixtures | Public TCP 80/443 and Docker DNS only. No inference exception, app-loopback exception, published CDP port, app storage or credentials. #27 tests this policy. |
+| Production demo worker | No network at all. A private Unix socket carries bounded verification requests. Chromium sandboxing and process limits are described in the [server guide](private-server.md#interactive-demos-25). |
 
 The network policy allows public provider APIs, not every provider's product flow. No subscription is enabled or live-tested by this work. Installed flows include OpenAI authentication at `auth.openai.com` and inference at `api.openai.com`, GitHub device authentication at `github.com` and Copilot APIs, and xAI authentication at `auth.x.ai` with inference at `api.x.ai`. Public HTTPS destinations fit the network policy. Private enterprise endpoints need a separate approved exception. Extra OAuth callback listeners are not published; in particular, ChatGPT's `127.0.0.1:1455` callback is not made remotely usable here. Claude Code is not installed or enabled. Desktop subscription, updater and browser behavior is unchanged. See the [source inventory](container-egress-research.md) and [architecture](architecture.md#host-and-providers).
 
@@ -26,7 +27,7 @@ The guard starts with outbound default-deny rules and no timed grants. Before re
 
 Outbound grants expire in five seconds and are renewed every second. Original-direction packets, including packets on established connections, must match current grants. There is no general established-connection bypass. If the guard crashes or stalls, the kernel stops outbound traffic when the grants expire. A socket may remain open but cannot continue transmitting. Local health and responses to incoming app requests can remain available.
 
-The app starts only after the guard writes a new heartbeat following the startup check. Guard health checks require the same fresh confirmation. A still-unexpired file from a dead guard is not enough, even if Linux reuses its namespace inode on the same boot. Research and downloaded-PDF admission checks then read the current five-second lease every time. The status must be root-owned, non-writable by the app, fresh on the boot clock, from the current kernel boot, in the same network namespace, and match the policy and network topology. The boot ID prevents persisted state from matching a reused namespace inode and uptime after a reboot. An environment flag or stale file cannot enable a capability. Without a valid check, tools are omitted and stale/direct calls and recovered jobs are refused. Files, local-path PDF jobs, demos and visuals retain their separate gates.
+The app starts only after the guard writes a new heartbeat following the startup check. Guard health checks require the same fresh confirmation. A still-unexpired file from a dead guard is not enough, even if Linux reuses its namespace inode on the same boot. Research and downloaded-PDF admission checks then read the current five-second lease every time. The status must be root-owned, non-writable by the app, fresh on the boot clock, from the current kernel boot, in the same network namespace, and match the policy and network topology. The boot ID prevents persisted state from matching a reused namespace inode and uptime after a reboot. An environment flag or stale file cannot enable a capability. Without a valid check, tools are omitted and stale/direct calls and recovered jobs are refused. Files, local-path PDF jobs, demos and visuals retain their separate mount, sandbox and native-render checks.
 
 Container address, route, routing-rule or resolver changes invalidate the topology. Unexpected topology or firewall changes latch a guard fault, restore the known default-deny table with empty grants, and remove ready status. They do not silently create a new baseline. Resolve the cause and explicitly recreate the pair under the maintenance procedure. Public DNS answers can change without a firewall update because public addresses on ports 80/443 are already allowed. The application still resolves and validates each web/PDF request. The private inference exception is an IP literal and never follows a hostname to a newly permitted private address.
 
@@ -67,15 +68,15 @@ These commands are maintenance recipes, not authorization to run them on the liv
 ```bash
 # SERVER_ENV points outside the checkout to the private environment file.
 docker compose --env-file "$SERVER_ENV" -p learnharness \
-  -f compose.yaml -f compose.server.yaml build egress app
+  -f compose.yaml -f compose.server.yaml build egress demo app
 
 # Stop the dependent before its namespace owner.
 docker compose --env-file "$SERVER_ENV" -p learnharness \
-  -f compose.yaml -f compose.server.yaml stop app egress
+  -f compose.yaml -f compose.server.yaml stop app demo egress
 
 # Replace BOTH containers. Never recreate just the namespace owner.
 docker compose --env-file "$SERVER_ENV" -p learnharness \
-  -f compose.yaml -f compose.server.yaml up -d --no-build --force-recreate --wait egress app
+  -f compose.yaml -f compose.server.yaml up -d --no-build --force-recreate --wait egress demo app
 ```
 
 The app keeps `app-data` and `app-auth`; the separate `egress-state` volume holds no learner data or keys. Port `127.0.0.1:3000:3000` is published by the guard because Docker does not let a namespace-sharing dependent publish ports. The Next server still handles the connection and Tailscale identity checks. Do not publish any other port or attach another container to this namespace.
@@ -113,6 +114,6 @@ Removing the guard is not permission to run this server unrestricted. Research a
 
 The host, Docker administrator, guard and configured inference backend are trusted. Container output filtering sees destination addresses before subsequent host/router NAT. It cannot prove that every public address will never be rewritten to a local service later. Explicit known-local CIDRs reduce that risk but do not make this protection against a compromised host or router. The inference backend itself may make further requests outside this container's control.
 
-The owner's browser is outside the container policy too. Browser dictation and any future displayed generated HTML need their own assessment; #25 owns demo display and execution isolation. No claim of production browser sandbox readiness follows from the disposable Chromium network test.
+The owner's browser is outside the container policy too. Browser dictation connects directly to its configured service. Displayed demos use an opaque iframe and block HTTP resources, fetch and navigation, but DNS/preconnect and WebRTC UDP remain possible. The owner accepted those client-side channels; the browser is not fully offline. Production verification instead uses a networkless worker with its own Chromium sandbox proof. No claim of that sandbox's readiness follows from the older disposable Chromium network test.
 
 See the [verification checklist](verification/27-container-egress.md). Disposable checks use controlled endpoints, not the real proxy, subscriptions, searches or learner records. Passing them does not approve live deployment.

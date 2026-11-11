@@ -4,7 +4,8 @@ import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute } from "../tool-execute.ts";
 import { capOutput, formatSize, MAX_OUTPUT_BYTES, resolveSourcePath, sourceSearchRoots } from "./fs-shared.ts";
-import { resolvePolicy } from "./file-access.ts";
+import { resolvePolicy, SERVER_FILE_TOOLS_HELP } from "./file-access.ts";
+import { isServerMode } from "../../core/server-capabilities.ts";
 
 /**
  * The ls tool — sources v1 (2026-09-19): a Node port of pi's
@@ -28,7 +29,12 @@ const lsInput = Type.Object({
 export const lsTool: AgentTool<typeof lsInput> = {
 	name: "ls",
 	label: "ls",
-	description: `List directory contents, or list the allowed folder paths when restriction is enabled and no path is supplied. Inspect a listed folder by supplying its path. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to ${DEFAULT_LIMIT} entries or ${formatSize(MAX_OUTPUT_BYTES)} (whichever is hit first).`,
+	get description() {
+		const format = `Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to ${DEFAULT_LIMIT} entries or ${formatSize(MAX_OUTPUT_BYTES)} (whichever is hit first).`;
+		return isServerMode()
+			? `List directory contents. Inspect a folder by supplying its absolute path. ${format} ${SERVER_FILE_TOOLS_HELP}`
+			: `List directory contents, or list the allowed folder paths when restriction is enabled and no path is supplied. Inspect a listed folder by supplying its path. ${format}`;
+	},
 	parameters: lsInput,
 	execute: serverExecute("ls", lsInput, async (input) => {
 		const policy = resolvePolicy();

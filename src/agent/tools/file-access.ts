@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { isServerCapabilityAvailable, isServerMode } from "../../core/server-capabilities.ts";
 
 /** Learner-source policy seam, based on lickbot's #157. The server supplies
  * current preferences per operation; agents never import the settings store.
@@ -21,7 +22,25 @@ let currentPolicy: () => FileAccessPolicy = () => OPEN_POLICY;
 
 export function setFileAccessPolicy(provider: () => FileAccessPolicy): void { currentPolicy = provider; }
 
+/** The only learner-file root in server mode, a read-only container mount. */
+export const SERVER_MATERIALS_ROOT = "/materials";
+const SERVER_FILES_UNAVAILABLE = "File access is not available on this server.";
+// Frozen: fileAccessPolicy returns this shared object, and a caller's mutation
+// must not widen later calls despite the readonly type being bypassable.
+const SERVER_POLICY: FileAccessPolicy = Object.freeze({ restricted: true, folders: Object.freeze([SERVER_MATERIALS_ROOT]) });
+/** Server-only tool help, matching SERVER_POLICY. Desktop descriptions keep their own text. */
+export const SERVER_FILE_TOOLS_HELP =
+	`On this server the only file root is ${SERVER_MATERIALS_ROOT}, a read-only folder the server operator manages. ` +
+	`Use absolute ${SERVER_MATERIALS_ROOT}/... paths; relative and ~ paths resolve outside it and are refused. ` +
+	`ls without a path lists ${SERVER_MATERIALS_ROOT}. Browser File access settings cannot widen this.`;
+
 export function fileAccessPolicy(): FileAccessPolicy {
+	// Checked before the installable provider, so the open default and browser
+	// settings never apply on a server, even before composition installs it.
+	if (isServerMode()) {
+		if (!isServerCapabilityAvailable("files")) throw new Error(SERVER_FILES_UNAVAILABLE);
+		return SERVER_POLICY;
+	}
 	let policy: FileAccessPolicy;
 	try { policy = currentPolicy(); }
 	catch { throw new Error("File-access configuration error: preferences cannot be read. Repair File access in Settings → Agent → Tools."); }
@@ -68,9 +87,34 @@ export function realSourcePath(absolute: string): string {
 	}
 }
 
+/** Frozen server snapshots made by resolvePolicy. Any other policy object a
+ * caller supplies on a server is replaced by a fresh mandatory snapshot. */
+const serverSnapshots = new WeakSet<ResolvedFileAccessPolicy>();
+
 /** One snapshot per tool call, shared by every root in a multi-root search.
- * Unmounted/unreadable roots never become a default-home fallback. */
-export function resolvePolicy(policy: FileAccessPolicy = fileAccessPolicy()): ResolvedFileAccessPolicy {
+ * Unmounted/unreadable roots never become a default-home fallback. On a
+ * server a supplied policy is ignored: only the /materials policy applies. */
+export function resolvePolicy(supplied?: FileAccessPolicy): ResolvedFileAccessPolicy {
+	if (!isServerMode()) return resolveFolders(supplied ?? fileAccessPolicy());
+	const resolved = resolveFolders(fileAccessPolicy());
+	const snapshot = Object.freeze({ ...resolved, folders: Object.freeze([...resolved.folders]), unavailable: Object.freeze([...resolved.unavailable]) });
+	serverSnapshots.add(snapshot);
+	return snapshot;
+}
+
+/** The policy to enforce: the supplied one on desktop or when it is a server
+ * snapshot from resolvePolicy, otherwise a fresh mandatory snapshot. A reused
+ * server snapshot keeps its resolved roots but re-checks files readiness on
+ * every call, so a mount lost mid-operation still fails closed. */
+export function effectivePolicy(supplied?: ResolvedFileAccessPolicy): ResolvedFileAccessPolicy {
+	if (!supplied) return resolvePolicy();
+	if (!isServerMode()) return supplied;
+	if (!serverSnapshots.has(supplied)) return resolvePolicy();
+	if (!isServerCapabilityAvailable("files")) throw new Error(SERVER_FILES_UNAVAILABLE);
+	return supplied;
+}
+
+function resolveFolders(policy: FileAccessPolicy): ResolvedFileAccessPolicy {
 	if (policy.error) throw new Error(policy.error);
 	if (!policy.restricted) return { restricted: false, folders: [], unavailable: [] };
 	const folders: string[] = [];
@@ -91,12 +135,15 @@ export function resolvePolicy(policy: FileAccessPolicy = fileAccessPolicy()): Re
 /** Accept only canonical source locations contained by the snapshot. Source
  * symlinks resolve before containment; a link cannot escape the chosen roots.
  * fs-shared runs its mandatory named AND canonical denials before this gate. */
-export function guardSourcePath(absolute: string, policy: ResolvedFileAccessPolicy = resolvePolicy()): string {
+export function guardSourcePath(absolute: string, supplied?: ResolvedFileAccessPolicy): string {
+	const policy = effectivePolicy(supplied);
 	const real = realSourcePath(absolute);
 	if (policy.restricted && !policy.folders.some((folder) => isWithin(real, folder))) {
 		throw new Error(
 			`Access denied: ${absolute} is outside the allowed folders, or no allowed folders are available. ` +
-			"Use ls without a path to list allowed folders, or ask the learner to adjust File access in Settings → Agent → Tools.",
+			(isServerMode()
+				? `On this server the only allowed folder is ${SERVER_MATERIALS_ROOT}, managed by the server operator. Use ls without a path to list it, or ask the learner to have the operator add the file there.`
+				: "Use ls without a path to list allowed folders, or ask the learner to adjust File access in Settings → Agent → Tools."),
 		);
 	}
 	return real;

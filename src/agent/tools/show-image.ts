@@ -2,6 +2,8 @@ import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute, type ImageFileResult } from "../tool-execute.ts";
 import { loadLearnerImage } from "./learner-image.ts";
+import { SERVER_FILE_TOOLS_HELP } from "./file-access.ts";
+import { isServerMode } from "../../core/server-capabilities.ts";
 import type { ShowImageDetails } from "../../core/contracts.ts";
 import type { ChatStore } from "../../core/ports.ts";
 
@@ -25,11 +27,13 @@ export function createShowImageTool(ctx: { chatId: string; chatStore: Pick<ChatS
 	return {
 		name: "show_image",
 		label: "show_image",
-		description:
-			"Show one of the learner's image files (jpg, png, gif, webp, bmp) in the lesson as-is, with an optional caption. " +
-			"Instant. The result only confirms what was shown — the image is not sent back to you; use read to look at it. " +
-			"To draw marks on the image, call visual with its path instead. Visual results display automatically: do not repeat a newly delivered result. " +
-			"Show a picture again only when resurfacing it meaningfully helps the current explanation. Local paths follow File access settings; use ls to discover allowed folders.",
+		get description() {
+			return "Show one of the learner's image files (jpg, png, gif, webp, bmp) in the lesson as-is, with an optional caption. " +
+				"Instant. The result only confirms what was shown — the image is not sent back to you; use read to look at it. " +
+				"To draw marks on the image, call visual with its path instead. Visual results display automatically: do not repeat a newly delivered result. " +
+				"Show a picture again only when resurfacing it meaningfully helps the current explanation. " +
+				(isServerMode() ? SERVER_FILE_TOOLS_HELP : "Local paths follow File access settings; use ls to discover allowed folders.");
+		},
 		parameters: showImageInput,
 		execute: serverExecute("show_image", showImageInput, async ({ path, caption }, { signal }): Promise<ImageFileResult> => {
 			const image = await loadLearnerImage(path, signal);

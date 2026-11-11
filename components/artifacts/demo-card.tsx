@@ -7,7 +7,17 @@ import { InvertDiscIcon } from "@/components/artifacts/invert-disc";
 import { ChatActionsContext } from "@/components/chat";
 import { downloadFile, slugFilename } from "@/components/artifacts/download";
 import { DispatchCard } from "@/components/artifacts/dispatch-card";
-import type { ArtifactPartProps, DemoResult } from "@/src/core";
+import { useRuntimePolicy } from "@/components/runtime-policy";
+import {
+	demoHtmlProblem,
+	describeDemoHtmlProblem,
+	findExternalReferences,
+	offlineDemoDownload,
+	withOfflineDemoPolicy,
+	type ArtifactPartProps,
+	type DemoDocumentPolicy,
+	type DemoResult,
+} from "@/src/core";
 
 /**
  * Demo artifact card (W6): while the part is input-available, a job activity
@@ -24,6 +34,12 @@ import type { ArtifactPartProps, DemoResult } from "@/src/core";
  *
  * Bridge message handling is a pure function (reduceDemoBridgeState) so
  * tests cover it without a DOM.
+ *
+ * Server mode (RuntimePolicyProvider "offline", chosen by the server per
+ * request) applies to every demo shown, saved ones included: the srcdoc
+ * opens with the offline CSP, the page's frame-src 'none' header stops
+ * self-navigation, and downloads are wrapped in a fixed script-free outer
+ * page that plays the header's role (src/core/demo-document-policy.ts).
  */
 
 // ─── bridge injection + message handling (pure, testable) ───────────────────
@@ -48,8 +64,19 @@ setTimeout(post,400);
 
 /** Inject the bridge before </body> (or at the end of a body-less document). */
 export function buildDemoSrcDoc(html: string): string {
-	if (/<\/body>/i.test(html)) return html.replace(/<\/body>/i, `${DEMO_BRIDGE_SCRIPT}</body>`);
+	if (/<\/body>/i.test(html)) return html.replace(/<\/body>/i, () => `${DEMO_BRIDGE_SCRIPT}</body>`);
 	return `${html}${DEMO_BRIDGE_SCRIPT}`;
+}
+
+/** The iframe document under a deployment policy. */
+export function demoSrcDocFor(html: string, policy: DemoDocumentPolicy): string {
+	const srcDoc = buildDemoSrcDoc(html);
+	return policy === "offline" ? withOfflineDemoPolicy(srcDoc) : srcDoc;
+}
+
+/** The downloaded file under a deployment policy. */
+export function demoDownloadFor(title: string, html: string, policy: DemoDocumentPolicy): string {
+	return policy === "offline" ? offlineDemoDownload(title, html) : html;
 }
 
 export interface DemoBridgeState {
@@ -108,31 +135,58 @@ export function DemoOutputCard({
 			</div>
 		);
 	}
+	return <DemoResultView result={result} messageId={messageId} initialInverted={initialInverted} />;
+}
+
+function DemoResultView({
+	result,
+	messageId,
+	initialInverted,
+}: {
+	result: DemoResult;
+	messageId?: string;
+	initialInverted: boolean;
+}) {
+	const { demoDocuments: policy } = useRuntimePolicy();
 	const failed = result.html.length === 0;
-	if (failed) {
+	// Saved demos predate the server's limits; refuse what cannot be carried.
+	const refused = !failed && policy === "offline" ? demoHtmlProblem(result.html) : null;
+	if (failed || refused) {
 		return (
 			<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid="demo-card-failed">
 				<div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 					Interactive demo
 					<span className="rounded bg-red-500/15 px-1.5 py-0.5 text-red-500">failed</span>
 				</div>
-				<p className="mt-2 text-sm text-muted-foreground">{result.notes ?? "The demo could not be built."}</p>
+				<p className="mt-2 text-sm text-muted-foreground">
+					{refused
+						? `This demo cannot be shown on this server: ${describeDemoHtmlProblem(refused)}.`
+						: (result.notes ?? "The demo could not be built.")}
+				</p>
 			</div>
 		);
 	}
 	return (
-		<DemoFrame title={result.title} html={result.html} messageId={messageId} initialInverted={initialInverted} />
+		<DemoFrame
+			title={result.title}
+			html={result.html}
+			policy={policy}
+			messageId={messageId}
+			initialInverted={initialInverted}
+		/>
 	);
 }
 
 function DemoFrame({
 	title,
 	html,
+	policy,
 	messageId,
 	initialInverted = false,
 }: {
 	title: string;
 	html: string;
+	policy: DemoDocumentPolicy;
 	messageId?: string;
 	initialInverted?: boolean;
 }) {
@@ -156,7 +210,11 @@ function DemoFrame({
 			body: JSON.stringify({ input: { messageId, inverted: next } }),
 		}).catch(() => {});
 	};
-	const srcDoc = useMemo(() => buildDemoSrcDoc(html), [html]);
+	const srcDoc = useMemo(() => demoSrcDocFor(html, policy), [html, policy]);
+	const networkBlocked = useMemo(
+		() => policy === "offline" && findExternalReferences(html, 1).length > 0,
+		[html, policy],
+	);
 
 	useEffect(() => {
 		const onMessage = (event: MessageEvent) => {
@@ -193,7 +251,7 @@ function DemoFrame({
 						type="button"
 						aria-label="Download demo as HTML"
 						title="Download as HTML"
-						onClick={() => downloadFile(`${slugFilename(title)}.html`, html, "text/html")}
+						onClick={() => downloadFile(`${slugFilename(title)}.html`, demoDownloadFor(title, html, policy), "text/html")}
 						data-testid="demo-download"
 						className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 					>
@@ -201,6 +259,11 @@ function DemoFrame({
 					</button>
 				</div>
 			</div>
+			{networkBlocked && (
+				<p className="mt-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-600" data-testid="demo-offline-note">
+					This demo refers to network resources. This server runs demos offline, so those parts will not load.
+				</p>
+			)}
 			{state.error && (
 				<DemoErrorChip
 					title={title}
@@ -214,6 +277,7 @@ function DemoFrame({
 				// allow-scripts ONLY — no allow-same-origin: the demo can run code
 				// but never touch the app's storage, cookies, or DOM.
 				sandbox="allow-scripts"
+				referrerPolicy={policy === "offline" ? "no-referrer" : undefined}
 				srcDoc={srcDoc}
 				// scrolling OFF (owner, 2026-10-07): the bridge auto-sizes the
 				// iframe to its content, so an internal scrollbar can only appear

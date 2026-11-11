@@ -3,7 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AUTH_FILE, BACKUP_STAGING_DIR } from "../../../config.ts";
-import { comparisonPath, guardSourcePath, isWithin, realSourcePath as realOrMissing, resolvePolicy, type ResolvedFileAccessPolicy } from "./file-access.ts";
+import { isServerMode } from "../../core/server-capabilities.ts";
+import { comparisonPath, effectivePolicy, guardSourcePath, isWithin, realSourcePath as realOrMissing, SERVER_MATERIALS_ROOT, type ResolvedFileAccessPolicy } from "./file-access.ts";
 
 /**
  * Shared plumbing for the learner-filesystem tools (ls / find / grep) —
@@ -188,11 +189,28 @@ export function resolveSourcePath(p?: string, policy?: ResolvedFileAccessPolicy)
 	return guardSourcePath(checkedSourcePath(resolved, sourcePathCheck(home)), policy);
 }
 
+/** Research PDFs only: reopen a file this job downloaded itself. It is not a
+ *  learner-file policy and grants nothing else. The mandatory protected-location
+ *  denials still run; the canonical path must equal the issued path, stay inside
+ *  the job directory, and be the same regular file (device and inode) written. */
+export function resolveIssuedDownload(file: string, jobRoot: string, issued: { dev: number; ino: number }): string {
+	const checked = checkedSourcePath(path.resolve(file), sourcePathCheck());
+	const root = fsSync.realpathSync.native(/* turbopackIgnore: true */ jobRoot);
+	if (checked !== file || checked === root || !isWithin(checked, root)) throw new Error("not an issued download");
+	const stat = fsSync.lstatSync(/* turbopackIgnore: true */ checked);
+	if (!stat.isFile() || stat.dev !== issued.dev || stat.ino !== issued.ino) throw new Error("not an issued download");
+	return checked;
+}
+
 /** Explicit paths retain their HOME meaning. Only an omitted directory in
  * restricted mode selects the union of available roots, never home. */
-export function sourceSearchRoots(p?: string, policy: ResolvedFileAccessPolicy = resolvePolicy()): { roots: string[]; notices: string[]; multiRoot: boolean } {
+export function sourceSearchRoots(p?: string, supplied?: ResolvedFileAccessPolicy): { roots: string[]; notices: string[]; multiRoot: boolean } {
+	const policy = effectivePolicy(supplied);
 	if (p || !policy.restricted) return { roots: [resolveSourcePath(p, policy)], notices: [], multiRoot: false };
-	const notices = policy.unavailable.length ? [`Skipped ${policy.unavailable.length} unavailable allowed folder(s). Check File access settings`] : [];
+	const server = isServerMode();
+	const notices = policy.unavailable.length
+		? [`Skipped ${policy.unavailable.length} unavailable allowed folder(s). ${server ? `The server operator must repair the ${SERVER_MATERIALS_ROOT} mount` : "Check File access settings"}`]
+		: [];
 	const roots: string[] = [];
 	let protectedRoots = 0;
 	for (const folder of policy.folders) {
@@ -200,7 +218,11 @@ export function sourceSearchRoots(p?: string, policy: ResolvedFileAccessPolicy =
 		catch { protectedRoots++; }
 	}
 	if (protectedRoots) notices.push(`Skipped ${protectedRoots} protected allowed folder(s); sensitive-location denials cannot be overridden`);
-	if (!roots.length) throw new Error("Access denied: no accessible allowed folders. Add or repair folders in Settings → Agent → Tools → File access.");
+	if (!roots.length) {
+		throw new Error(server
+			? `Access denied: no accessible allowed folders. On this server the only allowed folder is ${SERVER_MATERIALS_ROOT}, and the server operator must add or repair its mount.`
+			: "Access denied: no accessible allowed folders. Add or repair folders in Settings → Agent → Tools → File access.");
+	}
 	return { roots, notices, multiRoot: true };
 }
 

@@ -90,3 +90,5 @@ export * from "./coverage.ts";
 // ONE session→markdown formatter — the extractor's view and the user-facing
 // export share it. Pure, browser-safe.
 export * from "./session-markdown.ts";
+// Offline demo documents (server mode): CSP, size limits, download wrapper.
+export * from "./demo-document-policy.ts";

@@ -1,0 +1,91 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>offline policy probe</title>
+<link rel="stylesheet" href="http://127.0.0.1:8080/hit/link-stylesheet">
+<link rel="prefetch" href="http://127.0.0.1:8080/hit/link-prefetch">
+<link rel="preload" as="image" href="http://127.0.0.1:8080/hit/link-preload">
+<link rel="preconnect" href="http://preconnect-leak.test">
+<link rel="dns-prefetch" href="//dns-prefetch-leak.test">
+<link rel="icon" href="http://127.0.0.1:8080/hit/link-icon">
+<style>
+@import url("http://127.0.0.1:8080/hit/css-import");
+body { background: url("http://127.0.0.1:8080/hit/css-url"); }
+@font-face { font-family: x; src: url("http://127.0.0.1:8080/hit/css-font"); }
+.f { font-family: x; }
+</style>
+<script src="http://127.0.0.1:8080/hit/script-src"></script>
+<base href="http://127.0.0.1:8080/hit/base/">
+</head>
+<body>
+<p class="f">probe</p>
+<img src="http://127.0.0.1:8080/hit/img">
+<img srcset="http://127.0.0.1:8080/hit/img-srcset 1x">
+<video src="http://127.0.0.1:8080/hit/video"></video>
+<audio src="http://127.0.0.1:8080/hit/audio"></audio>
+<object data="http://127.0.0.1:8080/hit/object"></object>
+<embed src="http://127.0.0.1:8080/hit/embed">
+<iframe src="http://127.0.0.1:8080/hit/iframe"></iframe>
+<svg><image href="http://127.0.0.1:8080/hit/svg-image" width="1" height="1"/></svg>
+<a id="ping" href="#x" ping="http://127.0.0.1:8080/hit/a-ping">ping</a>
+<a href="http://anchor-dns-leak.test/">anchor</a>
+<form id="form" action="http://127.0.0.1:8080/hit/form" method="post"><input name="a" value="b"></form>
+<script>
+var results = {};
+function report(name, outcome) {
+	results[name] = String(outcome);
+	try { parent.postMessage({ type: "probe", name: name, outcome: String(outcome) }, "*"); } catch (e) {}
+}
+function attempt(name, fn) {
+	try { var r = fn(); if (r && r.then) r.then(function () { report(name, "resolved"); }, function (e) { report(name, "rejected: " + e); }); else report(name, "ran"); }
+	catch (e) { report(name, "threw: " + e.name); }
+}
+var U = "http://127.0.0.1:8080/hit/";
+attempt("fetch", function () { return fetch(U + "fetch", { mode: "no-cors" }); });
+attempt("xhr", function () { var x = new XMLHttpRequest(); x.open("GET", U + "xhr"); x.send(); });
+attempt("websocket", function () { new WebSocket("ws://127.0.0.1:8080/hit/websocket"); });
+attempt("eventsource", function () { new EventSource(U + "eventsource"); });
+attempt("beacon", function () { return navigator.sendBeacon(U + "beacon", "x") ? undefined : Promise.reject("false"); });
+attempt("dynamic-import", function () { return import(U + "dynamic-import"); });
+attempt("worker-blob", function () { new Worker(URL.createObjectURL(new Blob(["fetch('" + U + "worker-fetch')"]))); });
+attempt("worker-url", function () { new Worker(U + "worker-url"); });
+attempt("shared-worker", function () { new SharedWorker(U + "shared-worker"); });
+attempt("service-worker", function () { return navigator.serviceWorker.register(U + "sw.js"); });
+attempt("new-image", function () { new Image().src = U + "new-image"; });
+attempt("css-dom", function () { document.body.style.backgroundImage = "url(" + U + "css-dom)"; });
+attempt("window-open", function () { var w = window.open(U + "window-open"); if (!w) throw { name: "blocked-null" }; });
+attempt("top-navigation", function () { top.location.href = U + "top-navigation"; });
+attempt("form-submit", function () { document.getElementById("form").submit(); });
+attempt("ping-click", function () { document.getElementById("ping").click(); });
+attempt("localStorage", function () { localStorage.setItem("a", "b"); });
+attempt("sessionStorage", function () { sessionStorage.setItem("a", "b"); });
+attempt("cookie", function () { document.cookie = "a=b"; if (document.cookie.indexOf("a=b") === -1) throw { name: "not-stored" }; });
+attempt("indexedDB", function () { var r = indexedDB.open("x"); return new Promise(function (ok, bad) { r.onsuccess = ok; r.onerror = function () { bad(r.error && r.error.name); }; }); });
+attempt("caches", function () { return caches.open("x"); });
+attempt("parent-dom", function () { return parent.document.title; });
+attempt("top-dom", function () { return top.document.title; });
+attempt("webtransport", function () { var t = new WebTransport("https://127.0.0.1:4433/hit/webtransport"); return t.ready; });
+attempt("webrtc-stun", function () {
+	var pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:__STUN_HOST__:3478" }, { urls: "turn:__STUN_HOST__:3479", username: "u", credential: "c" }] });
+	pc.createDataChannel("x");
+	pc.onicecandidate = function (e) { if (e.candidate) report("webrtc-candidate-" + e.candidate.type, e.candidate.address || "?"); };
+	pc.onicegatheringstatechange = function () { report("webrtc-gathering", pc.iceGatheringState); };
+	return pc.createOffer().then(function (o) { return pc.setLocalDescription(o); });
+});
+attempt("webrtc-nested-frame", function () {
+	var f = document.createElement("iframe");
+	document.body.appendChild(f);
+	var W = f.contentWindow && f.contentWindow.RTCPeerConnection;
+	if (!W) throw { name: "no-constructor" };
+	var pc = new W({ iceServers: [{ urls: "stun:__STUN_HOST__:3480" }] });
+	pc.createDataChannel("x");
+	return pc.createOffer().then(function (o) { return pc.setLocalDescription(o); });
+});
+attempt("dynamic-preconnect", function () { var l = document.createElement("link"); l.rel = "preconnect"; l.href = "http://dynamic-preconnect-leak.test"; document.head.appendChild(l); });
+attempt("dynamic-dns-prefetch", function () { var l = document.createElement("link"); l.rel = "dns-prefetch"; l.href = "//dynamic-dns-prefetch-leak.test"; document.head.appendChild(l); });
+attempt("dns-fetch", function () { return fetch("http://dns-fetch-leak.test/"); });
+setTimeout(function () { report("navigation-start", "ran"); location.href = U + "self-navigation"; }, 3000);
+</script>
+</body>
+</html>

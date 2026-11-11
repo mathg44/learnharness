@@ -7,7 +7,10 @@ RUN npm ci
 
 FROM dependencies AS build
 COPY . .
-RUN npm run build && node scripts/container/assemble.mjs
+# Harden files while they are still in this layer. Doing the recursive chmod
+# after COPY in runtime would copy up the entire standalone tree again.
+RUN npm run build && node scripts/container/assemble.mjs \
+    && chmod -R a-w .next/standalone
 
 # Network tools are inert in the unprivileged app. Only the separate guard
 # receives NET_ADMIN, confined to its own network namespace.
@@ -39,7 +42,8 @@ COPY scripts/egress/ /usr/local/lib/learnharness/egress/
 RUN mkdir -p /data /auth /app/.next/cache \
     && chown 1000:1000 /data /auth \
     && chmod 700 /data /auth \
-    && chmod -R a-w /app /usr/local/lib/learnharness
+    && chmod a-w /app \
+    && chmod -R a-w /usr/local/lib/learnharness
 USER 1000:1000
 EXPOSE 3000
 STOPSIGNAL SIGTERM

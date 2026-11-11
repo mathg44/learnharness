@@ -1,0 +1,1 @@
+Synthetic materials fixture marker
