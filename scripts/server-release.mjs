@@ -37,7 +37,7 @@ const MESSAGES = {
 	SECCOMP_MISMATCH: "The running demo worker's seccomp profile differs from the revision's scripts/demo/seccomp.json.",
 	TAG_EXISTS: "A retention tag for this release already exists. Tags are never overwritten.",
 	TAG_FAILED: "Tagging an image failed. Tags this run created were removed.",
-	RELEASE_CLEANUP_FAILED: "Preserving failed, and undoing it failed too: either a release directory this run had already published could not be withdrawn, in which case it and its new tags were kept for the owner to review, or the retention tags it created could not be removed. Do not use a release from this run without that review. Only tags ending in this run's -<UTC time>-<12-character commit> can be its own. Do not remove any other tag, including installed and older release tags, and do not prune. If you cannot tell which tags this run created, stop and ask the owner.",
+	RELEASE_CLEANUP_FAILED: "Preserving failed, and undoing it failed too: either withdrawal of this run's published release could not be completed or confirmed, so its new tags were kept and release material may remain for owner review, or the retention tags it created could not be removed. Do not use a release from this run without that review. Only tags ending in this run's -<UTC time>-<12-character commit> can be its own. Do not remove any other tag, including installed and older release tags, and do not prune. If you cannot tell which tags this run created, stop and ask the owner.",
 	RELEASE_INVALID: "The release is missing, partial or altered.",
 	IMAGE_MISSING: "An image ID recorded in the release is not present locally. It is never pulled.",
 	TAG_MISMATCH: "A retention tag is missing or no longer names the recorded image.",

@@ -243,14 +243,25 @@ A failed replacement can return to the previous images and pre-update data only 
 5. Use the preserved recipes, seccomp and image override, plus the recovery env and volumes override. Inspect the merged configuration privately before starting. Keep the original Compose project and URL:
 
    ```bash
-   docker compose --project-directory "$PREVIOUS_RELEASE" \
-     --env-file "$RECOVERY_ENV" -p learnharness \
-     -f "$PREVIOUS_RELEASE/compose.yaml" \
-     -f "$PREVIOUS_RELEASE/compose.server.yaml" \
-     -f "$PREVIOUS_RELEASE/images.override.yaml" \
-     -f "$PREVIOUS_RELEASE/volumes.override.yaml" \
-     -f "$RECOVERY_VOLUMES_OVERRIDE" \
-     up -d --no-build --force-recreate --wait egress demo app
+   RECOVERY_COMPOSE=(docker compose --project-directory "$PREVIOUS_RELEASE"
+     --env-file "$RECOVERY_ENV" -p learnharness
+     -f "$PREVIOUS_RELEASE/compose.yaml"
+     -f "$PREVIOUS_RELEASE/compose.server.yaml"
+     -f "$PREVIOUS_RELEASE/images.override.yaml"
+     -f "$PREVIOUS_RELEASE/volumes.override.yaml"
+     -f "$RECOVERY_VOLUMES_OVERRIDE")
+   (
+     umask 077
+     set -o noclobber
+     "${RECOVERY_COMPOSE[@]}" config > "$PRIVATE_DIR/recovery.compose.yaml"
+   )
+   chmod 600 "$PRIVATE_DIR/recovery.compose.yaml"
+   ```
+
+   Inspect that private file and obtain approval for this exact recovery. Only then start it with the identical arrangement:
+
+   ```bash
+   "${RECOVERY_COMPOSE[@]}" up -d --no-build --force-recreate --wait egress demo app
    ```
 
    The approved materials folder remains an external read-only dependency; it is not included in profile backups. The guard and demo socket state are recreated, not restored as readiness evidence.

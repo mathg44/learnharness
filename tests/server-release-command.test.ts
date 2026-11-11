@@ -845,7 +845,7 @@ import fs from "node:fs";
 const target = process.env.LH_TEST_FAIL_ROOT;
 const open = fs.promises.open;
 fs.promises.open = async function (file, flags, ...rest) {
-	if (file === target && flags === "r" && fs.readdirSync(target).some((name) => name.startsWith("release-"))) {
+	if (file === target && flags === "r" && (process.env.LH_TEST_FAIL_WITHDRAW_SYNC || fs.readdirSync(target).some((name) => name.startsWith("release-")))) {
 		throw Object.assign(new Error("synthetic EIO"), { code: "EIO" });
 	}
 	return open.call(this, file, flags, ...rest);
@@ -881,6 +881,20 @@ it("preserve reports a cleanup failure when withdrawing a renamed release cannot
 	assert.equal(result.status, 1);
 	assert.match(result.stderr, /^server-release: RELEASE_CLEANUP_FAILED: /);
 	assert.deepEqual(fs.readdirSync(t.releases).filter((name) => name.startsWith("release-")), []);
+});
+
+it("preserve keeps every new tag when withdrawal cannot be synced", () => {
+	const t = setup();
+	fs.writeFileSync(t.planFile + ".state", JSON.stringify({ tags: { "learnharness:server": ids.app } }));
+	const failing = syncFails(t);
+	const result = t.preserve(t.snapshot().dir, [], { env: { ...failing.env, LH_TEST_FAIL_WITHDRAW_SYNC: "1" } });
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /^server-release: RELEASE_CLEANUP_FAILED: /);
+	assert.equal(result.stdout, "");
+	assert.deepEqual(fs.readdirSync(t.releases), []);
+	assert.deepEqual(tagCalls(t, "rm"), []);
+	assert.equal(t.tags()["learnharness:server"], ids.app);
+	assert.equal(Object.keys(t.tags()).length, 4);
 });
 
 it("preserve keeps every new tag when it cannot withdraw a release it already published", () => {

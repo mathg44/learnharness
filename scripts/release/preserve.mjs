@@ -487,12 +487,13 @@ async function preserveLocked({ root, bin, project, revision, now, git, snapshot
 	}
 }
 
-/** Moves a published release out of the release namespace, then deletes it. Returns whether both worked. */
+/** Withdraws the publication and syncs the root before its tags can be removed. */
 async function withdraw(root, published) {
 	const doomed = path.join(root, `.partial-delete-${crypto.randomUUID()}`);
 	try {
 		await fsp.rename(published, doomed);
 		await fsp.rm(doomed, { recursive: true, force: true });
+		await fsyncDirectory(root);
 		return true;
 	} catch {
 		return false;
