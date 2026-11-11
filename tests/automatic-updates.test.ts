@@ -13,7 +13,8 @@ const mainFile = fileURLToPath(new URL("../electron/main.cjs", import.meta.url))
 const mainSource = readFileSync(mainFile, "utf8");
 const mainRequire = createRequire(mainFile);
 
-function fixture({ packaged = true, updaterMissing = false } = {}) {
+function fixture({ packaged = true, updaterMissing = false, serverMode }: { packaged?: boolean; updaterMissing?: boolean; serverMode?: string } = {}) {
+	let updaterLoads = 0;
 	let settings: string | Error = JSON.stringify({ version: 1, general: { autoUpdate: true } });
 	const settingsReads: string[] = [];
 	const order: string[] = [];
@@ -88,6 +89,7 @@ function fixture({ packaged = true, updaterMissing = false } = {}) {
 		require: (id: string) => {
 			if (id === "electron") return electron;
 			if (id === "electron-updater") {
+				updaterLoads++;
 				if (updaterMissing) throw new Error("missing updater");
 				return { autoUpdater: updater };
 			}
@@ -100,7 +102,7 @@ function fixture({ packaged = true, updaterMissing = false } = {}) {
 			};
 			return mainRequire(id);
 		},
-		process: { argv: [], env: { LH_DEV_URL: "http://127.0.0.1:9000" }, platform: "darwin", on() {} },
+		process: { argv: [], env: { LH_DEV_URL: "http://127.0.0.1:9000", ...(serverMode === undefined ? {} : { LH_SERVER_MODE: serverMode }) }, platform: "darwin", on() {} },
 		__dirname: path.dirname(mainFile), URL,
 		setInterval: (callback: () => void, delay: number) => intervals.push({ callback, delay }),
 		setTimeout() {},
@@ -110,6 +112,7 @@ function fixture({ packaged = true, updaterMissing = false } = {}) {
 	const run = (code: string) => runInContext(code, context);
 	return {
 		run, updater, windows, intervals, handles, settingsReads, order, app,
+		updaterLoads: () => updaterLoads,
 		setSettings: (value: unknown) => { settings = JSON.stringify(value); },
 		setSettingsFailure: (value: string | Error) => { settings = value; },
 		setEnumerationFailure: (value: boolean) => { enumerationFails = value; },
@@ -119,6 +122,33 @@ function fixture({ packaged = true, updaterMissing = false } = {}) {
 		menuCheck: () => menu[0]!.submenu!.find(item => item.label === "Check for Updates…")!.click!(),
 	};
 }
+
+describe("server profile cannot use the desktop updater", () => {
+	for (const serverMode of ["tailscale", "", "invalid"]) {
+		it(`server mode ${JSON.stringify(serverMode)} never loads the updater or schedules checks`, async () => {
+			const f = fixture({ serverMode });
+			await f.run("main()");
+			assert.equal(f.updaterLoads(), 0);
+			assert.equal(f.updater.autoDownload, false);
+			assert.equal(f.updater.autoInstallOnAppQuit, false);
+			assert.equal(f.intervals.length, 0);
+			assert.equal(f.state().status, "disabled");
+		});
+		it(`server mode ${JSON.stringify(serverMode)} rejects manual checks and install without stopping the server`, async () => {
+			const f = fixture({ serverMode });
+			await f.run("main()");
+			const sender = f.windows[0]!.webContents;
+			f.handles.get("lh:update:check")!({ sender, senderFrame: sender.mainFrame });
+			f.menuCheck();
+			await f.check();
+			await f.check(true);
+			f.run("serverProcess = fixtureChild; installUpdateNow()");
+			assert.equal(f.updater.checks, 0);
+			assert.deepEqual(f.order, []);
+			assert.equal(f.updaterLoads(), 0);
+		});
+	}
+});
 
 describe("automatic-update preference gate", () => {
 	it("explicit OFF skips automatic checks, but manual checks still run without reading the preference", async () => {

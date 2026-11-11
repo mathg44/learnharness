@@ -177,7 +177,7 @@ docker compose --env-file "$SERVER_ENV" -p learnharness \
   -f compose.yaml -f compose.server.yaml stop app demo egress
 ```
 
-For updates, stop and recreate the app, demo worker and network guard together. Never recreate only the guard or fall back to the unrestricted base recipe. The [enforcement guide](container-egress.md#installation-and-replacement) covers pair recreation, inspection and removal.
+For updates, follow the [explicit update and rollback procedure](server-updates.md). Preserve the previous release and a verified pre-update snapshot, then obtain approval before stopping and recreating the app, demo worker and network guard together. Never recreate only the guard or fall back to the unrestricted base recipe. The [enforcement guide](container-egress.md#installation-and-replacement) covers namespace recreation, inspection and removal.
 
 The project name `learnharness` fixes the volume names `learnharness_app-data` and `learnharness_app-auth`. Keep it stable and run one writer. Never use `down --volumes` on records you want to keep. The image is about 2.1 GB; check free disk space before building. Isolation settings (non-root, read-only root, dropped capabilities, tmpfs, loopback port) come from [compose.yaml](../compose.yaml) and are described in the [production container guide](production-container.md).
 
@@ -209,7 +209,7 @@ docker run --rm --network none --read-only --user 1000:1000 \
   tar -czf - -C / data auth > "$BACKUP_DIR/server-$(date +%Y%m%d-%H%M%S).tar.gz"
 ```
 
-Check that it succeeded before restarting. Keep the previous image tagged before building a replacement. Tested update rollback is #30.
+Check that it succeeded before restarting. Keep the previous app, guard and demo images and their matching configuration. The [update guide](server-updates.md) describes release preservation, the original 14-day recovery deadline and isolated image-and-data rollback checks.
 
 ## Migrating from the trial
 

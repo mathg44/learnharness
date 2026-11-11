@@ -103,7 +103,7 @@ Shell, native-module, packaging/updater, or Electron changes warrant focused pla
 
 ## Updates and website notification
 
-Packaged apps check at startup and every 24 hours by default, download automatically, and install on quit or Restart. **Settings → General** provides release notes, manual checks, status, and Automatic updates. Disabling automatic checks does not cancel downloads/staged installs; manual checks still download updates. Dev builds disable the updater. Errors go to `userData/logs/main.log`; `LH_UPDATE_FEED` is a test-only generic-feed override.
+Packaged desktop apps check at startup and every 24 hours by default, download automatically, and install on quit or Restart. Any defined `LH_SERVER_MODE`, including an empty or invalid value, disables desktop updater setup, checks and installation. The private container runs the standalone server, not Electron; its [updates](server-updates.md) are operator-managed. **Settings → General** provides release notes, manual checks, status, and Automatic updates. Disabling automatic checks does not cancel downloads/staged installs; manual checks still download updates. Dev builds disable the updater. Errors go to `userData/logs/main.log`; `LH_UPDATE_FEED` is a test-only generic-feed override.
 
 Sources: [`electron/main.cjs`](../electron/main.cjs), [`preload.cjs`](../electron/preload.cjs), [`update-settings.tsx`](../components/settings/update-settings.tsx).
 
