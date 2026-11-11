@@ -85,7 +85,7 @@ No regular file is left out. A symlink, socket, device or other special file any
 
 Not included:
 
-- The image itself. A snapshot records the image ID but does not store the image. Keep the original image on the host for as long as you might restore its snapshots. #30's update workflow is responsible for keeping matching images and config.
+- The image itself. A snapshot records the image ID but does not store the image. Keep the original image on the host for as long as you might restore its snapshots. The [update workflow](server-updates.md) preserves matching app, guard and demo image tags, source and configuration. It does not save image archives.
 - Temporary files, caches, browser profiles and research downloads under `/tmp` or `/app/.next/cache`.
 - Original uploaded PDFs, which the app never keeps.
 - Anything held only in memory: a reply still streaming, question drafts, composer steers, a pending OAuth sign-in, running network workers.
@@ -121,7 +121,7 @@ node scripts/server-backup.mjs status
 
 Daily snapshots are deleted once they are 14 days old. Rotation runs only after a successful backup, so a run of failures never deletes the last good copies.
 
-A `pre-update` snapshot is for #30's updates. It carries a `protectedUntil` time exactly 14 days after its capture, and rotation never deletes it before then. Once `protectedUntil` has passed, the next successful `create` of either kind removes it. An update's rollback window must not extend past the `protectedUntil` of its pre-update snapshot. Take the pre-update snapshot just before the update, and keep the old image and config until the window closes.
+A `pre-update` snapshot is for [explicit updates](server-updates.md). It carries a `protectedUntil` time exactly 14 days after its capture, and rotation never deletes it before then. Once `protectedUntil` has passed, the next successful `create` of either kind removes it. An update's rollback window must not extend past the `protectedUntil` of its pre-update snapshot. Take the pre-update snapshot just before the update, and keep the old image and config until the window closes.
 
 ## Checking a restored copy
 

@@ -17,6 +17,7 @@
 - [Tool-content recovery](tool-content-recovery.md) — display-only recovery of model-authored escaping defects.
 - [Desktop builds and releases](desktop-release.md) — packaging, release gates, and updates.
 - [Private server backups](backups.md) — online snapshots, retention, and restore checks for the Tailscale server.
+- [Explicit server updates](server-updates.md) — upstream review, retained releases, candidate checks and image/data rollback.
 
 ## Teaching method
 

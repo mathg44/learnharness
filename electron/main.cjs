@@ -474,7 +474,7 @@ function automaticUpdatesEnabled() {
 }
 
 function checkForUpdates({ manual = false } = {}) {
-	if (!autoUpdater) return;
+	if (process.env.LH_SERVER_MODE !== undefined || !autoUpdater) return;
 	if (!manual && !automaticUpdatesEnabled()) {
 		log("auto-update: automatic check skipped (turned off in Settings)");
 		return;
@@ -495,6 +495,7 @@ function checkForUpdates({ manual = false } = {}) {
 }
 
 function installUpdateNow() {
+	if (process.env.LH_SERVER_MODE !== undefined) return;
 	// Kill the server BEFORE the quit-and-install (see block comment).
 	try {
 		killServer();
@@ -505,6 +506,13 @@ function installUpdateNow() {
 }
 
 function setupAutoUpdater() {
+	// Server installations are replaced only by their host operator. Treat
+	// even an empty or invalid server-mode value as a reason to deny updates.
+	if (process.env.LH_SERVER_MODE !== undefined) {
+		log("auto-update: server profile, updater disabled");
+		reportUpdateStatus("disabled");
+		return;
+	}
 	if (!app.isPackaged) {
 		log("auto-update: dev build — updater disabled");
 		reportUpdateStatus("disabled");
